@@ -180,7 +180,7 @@ export const SYLLABLE_DETECTION_CONFIG = {
   /** 最小音节时长 (ms) - 短于此时长的发声段会被忽略 */
   minSyllableDurationMs: 50,
   /** 能量阈值倍数 - 相对于噪声底的倍数，用于判断是否为有效发声 */
-  energyThresholdMultiplier: 1000
+  energyThresholdMultiplier: 500
 };
 
 /**

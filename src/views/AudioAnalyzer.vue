@@ -91,6 +91,11 @@
         </div>
 
         <div class="track-content" v-show="track.expanded">
+          <!-- 调试信息 -->
+          <div class="debug-info" v-if="track.debugInfo">
+            🔍 {{ track.debugInfo }}
+          </div>
+          
           <!-- 波形显示 -->
           <div class="waveform-section">
             <h3>📊 音频波形</h3>
@@ -143,12 +148,16 @@
                     v-for="(syl, sylIdx) in seq.syllables" 
                     :key="sylIdx"
                     class="syllable-marker"
-                    :class="[syl.guessedVowel?.toLowerCase() || 'unknown']"
+                    :class="[
+                      syl.guessedVowel?.toLowerCase() || 'unknown',
+                      { selected: selectedSyllable?.trackIdx === trackIdx && selectedSyllable?.seqIdx === seqIdx && selectedSyllable?.sylIdx === sylIdx }
+                    ]"
                     :style="{ 
                       left: `${((syl.start - seq.start) / (seq.end - seq.start)) * 100}%`, 
                       width: `${Math.max(2, ((syl.end - syl.start) / (seq.end - seq.start)) * 100)}%` 
                     }"
                     :title="`${syl.guessedVowel || '?'}: F1=${syl.f1.toFixed(0)}Hz, F2=${syl.f2.toFixed(0)}Hz`"
+                    @click="selectSyllable(trackIdx, seqIdx, sylIdx, syl)"
                   >
                     {{ syl.guessedVowel || '?' }}
                   </div>
@@ -160,9 +169,45 @@
                       v-for="(syl, sylIdx) in seq.syllables" 
                       :key="sylIdx" 
                       class="vowel-char"
-                      :class="syl.guessedVowel?.toLowerCase() || 'unknown'"
+                      :class="[
+                        syl.guessedVowel?.toLowerCase() || 'unknown',
+                        { selected: selectedSyllable?.trackIdx === trackIdx && selectedSyllable?.seqIdx === seqIdx && selectedSyllable?.sylIdx === sylIdx }
+                      ]"
+                      @click="selectSyllable(trackIdx, seqIdx, sylIdx, syl)"
                     >{{ syl.guessedVowel || '?' }}</span>
                   </span>
+                </div>
+                <!-- 选中音节详情 -->
+                <div class="syllable-detail" v-if="selectedSyllable && selectedSyllable.trackIdx === trackIdx && selectedSyllable.seqIdx === seqIdx">
+                  <div class="detail-header">
+                    <span class="detail-vowel" :class="selectedSyllable.syl.guessedVowel?.toLowerCase() || 'unknown'">
+                      {{ selectedSyllable.syl.guessedVowel || '?' }}
+                    </span>
+                    <span class="detail-title">音节 #{{ selectedSyllable.sylIdx + 1 }} 详情</span>
+                    <button class="close-btn" @click.stop="selectedSyllable = null">✕</button>
+                  </div>
+                  <div class="detail-grid">
+                    <div class="detail-item">
+                      <span class="detail-label">时间范围</span>
+                      <span class="detail-value">{{ (selectedSyllable.syl.start * 1000).toFixed(1) }}ms - {{ (selectedSyllable.syl.end * 1000).toFixed(1) }}ms</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">时长</span>
+                      <span class="detail-value">{{ ((selectedSyllable.syl.end - selectedSyllable.syl.start) * 1000).toFixed(1) }}ms</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">F1 (第一共振峰)</span>
+                      <span class="detail-value">{{ selectedSyllable.syl.f1.toFixed(0) }} Hz</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">F2 (第二共振峰)</span>
+                      <span class="detail-value">{{ selectedSyllable.syl.f2.toFixed(0) }} Hz</span>
+                    </div>
+                    <div class="detail-item">
+                      <span class="detail-label">音量</span>
+                      <span class="detail-value">{{ selectedSyllable.syl.volume.toFixed(1) }} dB</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -305,6 +350,13 @@ interface AudioTrack {
   stats: Record<string, VowelStat> | null;
   splitMarks: SplitMark[];
   expanded: boolean;
+  debugInfo?: string;
+  thresholdInfo?: {
+    noiseFloor: number;
+    maxEnergy: number;
+    highThreshold: number;
+    lowThreshold: number;
+  };
 }
 
 // ==================== 分析参数 ====================
@@ -324,6 +376,14 @@ const cursorInfo = ref({
   timeMs: 0,
   trackIdx: -1
 });
+
+// 选中的音节
+const selectedSyllable = ref<{
+  trackIdx: number;
+  seqIdx: number;
+  sylIdx: number;
+  syl: Syllable;
+} | null>(null);
 
 // Canvas refs
 const canvasRefs = reactive<Record<string, HTMLCanvasElement | null>>({});
@@ -420,11 +480,12 @@ async function loadDefaultAudio() {
   statusType.value = 'info';
   
   try {
-    const response = await fetch('/oiia-oiia-sound.mp3');
+    const fileName = 'Oiiaioooooiai.mp3';
+    const response = await fetch(`/${fileName}`);
     if (!response.ok) throw new Error(`无法加载: ${response.status}`);
     
     const arrayBuffer = await response.arrayBuffer();
-    await addAudioTrack(arrayBuffer, 'oiia-oiia-sound.mp3');
+    await addAudioTrack(arrayBuffer, fileName);
     
     status.value = '示例音频加载完成！';
     statusType.value = 'success';
@@ -470,8 +531,24 @@ async function toggleRecording() {
 }
 
 async function startRecording() {
+  // 检查是否支持 mediaDevices API
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    status.value = '❌ 您的浏览器不支持录音功能，或当前页面不是 HTTPS。请使用 HTTPS 访问或使用现代浏览器。';
+    statusType.value = 'error';
+    return;
+  }
+  
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    status.value = '正在请求麦克风权限...';
+    statusType.value = 'info';
+    
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      } 
+    });
     mediaRecorder = new MediaRecorder(stream);
     recordedChunks = [];
     
@@ -510,12 +587,29 @@ async function startRecording() {
     recordingStartTime = Date.now();
     recordingDuration.value = 0;
     
+    status.value = '🎙️ 正在录制...';
+    statusType.value = 'info';
+    
     recordingInterval = setInterval(() => {
       recordingDuration.value = (Date.now() - recordingStartTime) / 1000;
     }, 100);
     
-  } catch (err) {
-    status.value = `录制错误: ${err}`;
+  } catch (err: any) {
+    console.error('[AudioAnalyzer] 录制错误:', err);
+    
+    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+      status.value = '❌ 麦克风权限被拒绝。请在浏览器设置中允许此网站访问麦克风。';
+    } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+      status.value = '❌ 未找到麦克风设备。请确保您的设备有麦克风。';
+    } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+      status.value = '❌ 无法访问麦克风。可能被其他应用占用。';
+    } else if (err.name === 'OverconstrainedError') {
+      status.value = '❌ 麦克风不满足要求的约束条件。';
+    } else if (err.name === 'TypeError') {
+      status.value = '❌ 无法录音。请确保使用 HTTPS 访问此页面。';
+    } else {
+      status.value = `❌ 录制错误: ${err.message || err}`;
+    }
     statusType.value = 'error';
   }
 }
@@ -561,7 +655,10 @@ function analyzeTrack(trackIdx: number) {
   if (!track) return;
   
   // 检测序列和音节
-  track.sequences = detectSequencesAndSyllables(track.buffer);
+  const { sequences, debugInfo, thresholdInfo } = detectSequencesAndSyllables(track.buffer);
+  track.sequences = sequences;
+  track.debugInfo = debugInfo;
+  track.thresholdInfo = thresholdInfo;
   
   // 生成分析结果
   track.results = [];
@@ -656,6 +753,11 @@ function calculateStats(results: AnalysisResult[]): Record<string, VowelStat> | 
   }
   
   return stats;
+}
+
+// ==================== 音节选择 ====================
+function selectSyllable(trackIdx: number, seqIdx: number, sylIdx: number, syl: any) {
+  selectedSyllable.value = { trackIdx, seqIdx, sylIdx, syl };
 }
 
 // ==================== 分割标记 ====================
@@ -801,12 +903,17 @@ function writeString(view: DataView, offset: number, str: string) {
 }
 
 // ==================== 音频分析核心 ====================
-function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
+function detectSequencesAndSyllables(buffer: AudioBuffer): { 
+  sequences: Sequence[]; 
+  debugInfo: string; 
+  thresholdInfo: { noiseFloor: number; maxEnergy: number; highThreshold: number; lowThreshold: number };
+} {
   const data = buffer.getChannelData(0);
   const sampleRate = buffer.sampleRate;
   
-  const frameSize = Math.floor(sampleRate * 0.01);
-  const hopSize = Math.floor(frameSize / 2);
+  // 使用较小的帧进行更精细的分析
+  const frameSize = Math.floor(sampleRate * 0.01); // 10ms 帧
+  const hopSize = Math.floor(frameSize / 4); // 2.5ms 跳跃，更精细
   const energies: { time: number; energy: number }[] = [];
   
   for (let i = 0; i < data.length - frameSize; i += hopSize) {
@@ -820,19 +927,39 @@ function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
     });
   }
   
-  const sortedEnergies = energies.map(e => e.energy).sort((a, b) => a - b);
-  const noiseFloor = sortedEnergies[Math.floor(sortedEnergies.length * 0.3)];
-  const threshold = noiseFloor * params.energyThresholdMultiplier;
+  // 平滑能量曲线（3点移动平均）
+  const smoothedEnergies = energies.map((e, i) => {
+    if (i === 0 || i === energies.length - 1) return e;
+    return {
+      time: e.time,
+      energy: (energies[i-1].energy + e.energy + energies[i+1].energy) / 3
+    };
+  });
   
+  // 自适应阈值计算
+  const sortedEnergies = smoothedEnergies.map(e => e.energy).sort((a, b) => a - b);
+  const noiseFloor = sortedEnergies[Math.floor(sortedEnergies.length * 0.2)]; // 使用20%位置作为噪音底
+  const maxEnergy = sortedEnergies[sortedEnergies.length - 1];
+  
+  // 计算高低两个阈值（使用 energyThresholdMultiplier 参数）
+  // energyThresholdMultiplier 越大，阈值越高，检测越严格
+  const thresholdFactor = params.energyThresholdMultiplier / 1000; // 默认1000 -> 1.0
+  const highThreshold = Math.max(maxEnergy * 0.15 * thresholdFactor, noiseFloor * 10 * thresholdFactor);
+  const lowThreshold = Math.max(maxEnergy * 0.05 * thresholdFactor, noiseFloor * 3 * thresholdFactor);
+  
+  console.log(`[AudioAnalyzer] 参数: seqGap=${params.sequenceGapMs}ms, sylGap=${params.syllableGapMs}ms, minDur=${params.minSyllableDurationMs}ms, threshMult=${params.energyThresholdMultiplier}`);
+  console.log(`[AudioAnalyzer] 能量统计: noiseFloor=${noiseFloor.toExponential(2)}, max=${maxEnergy.toExponential(2)}, highTh=${highThreshold.toExponential(2)}, lowTh=${lowThreshold.toExponential(2)}`);
+  
+  // 使用双阈值检测声音片段（类似施密特触发器）
   const voiceSegments: { start: number; end: number }[] = [];
   let inVoice = false;
   let voiceStart = 0;
   
-  for (const { time, energy } of energies) {
-    if (!inVoice && energy > threshold) {
+  for (const { time, energy } of smoothedEnergies) {
+    if (!inVoice && energy > highThreshold) {
       voiceStart = time;
       inVoice = true;
-    } else if (inVoice && energy <= threshold) {
+    } else if (inVoice && energy < lowThreshold) {
       if (time - voiceStart >= params.minSyllableDurationMs / 1000) {
         voiceSegments.push({ start: voiceStart, end: time });
       }
@@ -840,27 +967,72 @@ function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
     }
   }
   if (inVoice) {
-    const lastTime = energies[energies.length - 1].time;
+    const lastTime = smoothedEnergies[smoothedEnergies.length - 1].time;
     if (lastTime - voiceStart >= params.minSyllableDurationMs / 1000) {
       voiceSegments.push({ start: voiceStart, end: lastTime });
     }
   }
   
+  // 对每个声音片段进行音节细分（基于能量谷值）
   const syllables: { start: number; end: number }[] = [];
+  
   for (const seg of voiceSegments) {
-    if (syllables.length === 0) {
+    // 获取该片段内的能量数据
+    const segEnergies = smoothedEnergies.filter(e => e.time >= seg.start && e.time <= seg.end);
+    if (segEnergies.length < 3) {
+      syllables.push({ ...seg });
+      continue;
+    }
+    
+    // 找到能量谷值点作为音节分割点
+    const valleys: number[] = [];
+    const segMaxEnergy = Math.max(...segEnergies.map(e => e.energy));
+    const valleyThreshold = segMaxEnergy * 0.3; // 谷值需要低于峰值的30%
+    
+    for (let i = 2; i < segEnergies.length - 2; i++) {
+      const prev2 = segEnergies[i-2].energy;
+      const prev = segEnergies[i-1].energy;
+      const curr = segEnergies[i].energy;
+      const next = segEnergies[i+1].energy;
+      const next2 = segEnergies[i+2].energy;
+      
+      // 检查是否是局部最小值且足够低
+      if (curr < prev && curr < next && 
+          curr < prev2 && curr < next2 &&
+          curr < valleyThreshold) {
+        valleys.push(i);
+      }
+    }
+    
+    // 过滤掉太近的谷值点（保持至少 minSyllableDurationMs 的间隔）
+    const minGapFrames = Math.floor(params.minSyllableDurationMs / 1000 / (hopSize / sampleRate));
+    const filteredValleys: number[] = [];
+    for (const v of valleys) {
+      if (filteredValleys.length === 0 || v - filteredValleys[filteredValleys.length - 1] >= minGapFrames) {
+        filteredValleys.push(v);
+      }
+    }
+    
+    // 根据谷值点分割音节
+    if (filteredValleys.length === 0) {
       syllables.push({ ...seg });
     } else {
-      const last = syllables[syllables.length - 1];
-      const gap = seg.start - last.end;
-      if (gap < params.syllableGapMs / 1000) {
-        last.end = seg.end;
-      } else {
-        syllables.push({ ...seg });
+      let lastStart = seg.start;
+      for (const vi of filteredValleys) {
+        const splitTime = segEnergies[vi].time;
+        if (splitTime - lastStart >= params.minSyllableDurationMs / 1000) {
+          syllables.push({ start: lastStart, end: splitTime });
+          lastStart = splitTime;
+        }
+      }
+      // 最后一个音节
+      if (seg.end - lastStart >= params.minSyllableDurationMs / 1000) {
+        syllables.push({ start: lastStart, end: seg.end });
       }
     }
   }
   
+  // 将音节按序列分组
   const sequenceGroups: { start: number; end: number }[][] = [];
   let currentGroup: { start: number; end: number }[] = [];
   
@@ -870,10 +1042,16 @@ function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
     } else {
       const lastSyl = currentGroup[currentGroup.length - 1];
       const gap = syl.start - lastSyl.end;
+      // 使用 sequenceGapMs 判断是否是新序列
       if (gap >= params.sequenceGapMs / 1000) {
         sequenceGroups.push(currentGroup);
         currentGroup = [syl];
+      } else if (gap >= params.syllableGapMs / 1000) {
+        // 使用 syllableGapMs 判断是否是同一序列内的不同音节
+        // 如果 gap 介于 syllableGapMs 和 sequenceGapMs 之间，认为是同一序列的不同音节
+        currentGroup.push(syl);
       } else {
+        // gap 太小，可能需要合并（但我们保留分离的音节）
         currentGroup.push(syl);
       }
     }
@@ -898,7 +1076,11 @@ function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
     result.push({ start: seqStart, end: seqEnd, syllables: analyzedSyllables });
   }
   
-  return result;
+  const debugInfo = `噪音: ${noiseFloor.toExponential(2)} | 最大: ${maxEnergy.toExponential(2)} | 高阈值: ${highThreshold.toExponential(2)} | 低阈值: ${lowThreshold.toExponential(2)} | ${voiceSegments.length} 声段 → ${syllables.length} 音节`;
+  
+  const thresholdInfo = { noiseFloor, maxEnergy, highThreshold, lowThreshold };
+  
+  return { sequences: result, debugInfo, thresholdInfo };
 }
 
 function analyzeFormants(buffer: AudioBuffer, start: number, end: number): { f1: number; f2: number; volume: number } {
@@ -1075,6 +1257,15 @@ function drawTrackWaveform(trackIdx: number) {
   ctx.fillStyle = '#1a1a2e';
   ctx.fillRect(0, 0, width, height);
   
+  // 先找到音频最大振幅，用于动态缩放
+  let maxAmplitude = 0;
+  for (let i = 0; i < data.length; i++) {
+    const absVal = Math.abs(data[i]);
+    if (absVal > maxAmplitude) maxAmplitude = absVal;
+  }
+  // 留一点余量，避免波形顶到边缘
+  const displayMax = maxAmplitude * 1.1;
+  
   ctx.strokeStyle = '#48dbfb';
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -1092,13 +1283,81 @@ function drawTrackWaveform(trackIdx: number) {
       }
     }
     
-    const y1 = ((1 + min) / 2) * height;
-    const y2 = ((1 + max) / 2) * height;
+    // 用 displayMax 缩放，而不是固定的 -1~1
+    const y1 = height / 2 - (min / displayMax) * (height / 2);
+    const y2 = height / 2 - (max / displayMax) * (height / 2);
     
     ctx.moveTo(i, y1);
     ctx.lineTo(i, y2);
   }
   ctx.stroke();
+  
+  // 绘制阈值线（如果有阈值信息）
+  if (track.thresholdInfo) {
+    const { noiseFloor, highThreshold, lowThreshold } = track.thresholdInfo;
+    
+    // 阈值是 RMS（能量），波形是振幅
+    // RMS 和振幅的关系：对于一般音频信号，RMS ≈ 峰值振幅 * 0.3~0.5
+    // 我们用同样的 displayMax 来归一化，这样阈值线和波形在同一个坐标系
+    const energyToY = (energy: number) => {
+      const normalized = Math.min(energy / displayMax, 1);
+      return height / 2 - normalized * (height / 2);
+    };
+    
+    // 绘制噪音底线
+    ctx.strokeStyle = '#666';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    const noiseY = energyToY(noiseFloor);
+    ctx.beginPath();
+    ctx.moveTo(0, noiseY);
+    ctx.lineTo(width, noiseY);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, height - noiseY + height / 2);
+    ctx.lineTo(width, height - noiseY + height / 2);
+    ctx.stroke();
+    
+    // 绘制低阈值线（绿色）
+    ctx.strokeStyle = '#2ecc71';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 3]);
+    const lowY = energyToY(lowThreshold);
+    ctx.beginPath();
+    ctx.moveTo(0, lowY);
+    ctx.lineTo(width, lowY);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, height - lowY + height / 2);
+    ctx.lineTo(width, height - lowY + height / 2);
+    ctx.stroke();
+    
+    // 绘制高阈值线（红色）
+    ctx.strokeStyle = '#ff6b6b';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 4]);
+    const highY = energyToY(highThreshold);
+    ctx.beginPath();
+    ctx.moveTo(0, highY);
+    ctx.lineTo(width, highY);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, height - highY + height / 2);
+    ctx.lineTo(width, height - highY + height / 2);
+    ctx.stroke();
+    
+    ctx.setLineDash([]);
+    
+    // 绘制图例
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#666';
+    ctx.fillText(`噪音底 ${noiseFloor.toExponential(1)}`, 5, noiseY - 3);
+    ctx.fillStyle = '#2ecc71';
+    ctx.fillText(`低阈值 ${lowThreshold.toExponential(1)}`, 5, lowY - 3);
+    ctx.fillStyle = '#ff6b6b';
+    ctx.fillText(`高阈值 ${highThreshold.toExponential(1)}`, 5, highY - 3);
+  }
   
   // 绘制序列和音节标记
   for (const seq of track.sequences) {
@@ -1123,7 +1382,7 @@ function drawTrackFormantPlot(trackIdx: number) {
   
   const ctx = canvas.getContext('2d')!;
   const { width, height } = canvas;
-  const padding = 40;
+  const padding = 50;
   
   const f1Min = 100, f1Max = 1100;
   const f2Min = 500, f2Max = 3500;
@@ -1134,6 +1393,7 @@ function drawTrackFormantPlot(trackIdx: number) {
   const toX = (f2: number) => padding + (f2 - f2Min) / (f2Max - f2Min) * (width - 2 * padding);
   const toY = (f1: number) => padding + (f1 - f1Min) / (f1Max - f1Min) * (height - 2 * padding);
   
+  // 绘制网格线
   ctx.strokeStyle = '#333';
   ctx.lineWidth = 1;
   for (let f1 = 200; f1 <= 1000; f1 += 200) {
@@ -1150,6 +1410,64 @@ function drawTrackFormantPlot(trackIdx: number) {
     ctx.lineTo(x, height - padding);
     ctx.stroke();
   }
+  
+  // 绘制坐标轴
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 2;
+  // Y轴
+  ctx.beginPath();
+  ctx.moveTo(padding, padding);
+  ctx.lineTo(padding, height - padding);
+  ctx.stroke();
+  // X轴
+  ctx.beginPath();
+  ctx.moveTo(padding, height - padding);
+  ctx.lineTo(width - padding, height - padding);
+  ctx.stroke();
+  
+  // 绘制Y轴刻度和标签 (F1)
+  ctx.fillStyle = '#aaa';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (let f1 = 200; f1 <= 1000; f1 += 200) {
+    const y = toY(f1);
+    ctx.fillText(`${f1}`, padding - 8, y);
+    // 刻度线
+    ctx.beginPath();
+    ctx.moveTo(padding - 4, y);
+    ctx.lineTo(padding, y);
+    ctx.stroke();
+  }
+  
+  // 绘制X轴刻度和标签 (F2)
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  for (let f2 = 1000; f2 <= 3000; f2 += 500) {
+    const x = toX(f2);
+    ctx.fillText(`${f2}`, x, height - padding + 8);
+    // 刻度线
+    ctx.beginPath();
+    ctx.moveTo(x, height - padding);
+    ctx.lineTo(x, height - padding + 4);
+    ctx.stroke();
+  }
+  
+  // 绘制坐标轴名称
+  ctx.fillStyle = '#feca57';
+  ctx.font = 'bold 12px sans-serif';
+  // Y轴名称 (F1)
+  ctx.save();
+  ctx.translate(15, height / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('F1 (Hz)', 0, 0);
+  ctx.restore();
+  // X轴名称 (F2)
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('F2 (Hz)', width / 2, height - 15);
   
   const colors: Record<string, string> = {
     U: '#9b59b6',
@@ -1457,6 +1775,18 @@ onUnmounted(() => {
   padding: 16px;
 }
 
+/* 调试信息 */
+.debug-info {
+  background: rgba(72, 219, 251, 0.1);
+  border: 1px solid rgba(72, 219, 251, 0.3);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 16px;
+  font-size: 0.8rem;
+  color: #48dbfb;
+  font-family: 'Fira Code', monospace;
+}
+
 /* 波形 */
 .waveform-section {
   margin-bottom: 20px;
@@ -1633,6 +1963,16 @@ onUnmounted(() => {
 .syllable-marker.o { background: rgba(255, 107, 107, 0.7); color: #fff; }
 .syllable-marker.unknown { background: rgba(136, 136, 136, 0.7); color: #fff; }
 
+.syllable-marker.selected {
+  box-shadow: 0 0 0 2px #fff, 0 0 8px 2px #feca57;
+  z-index: 10;
+}
+
+.syllable-marker:hover {
+  cursor: pointer;
+  filter: brightness(1.2);
+}
+
 .sequence-result {
   display: flex;
   align-items: center;
@@ -1661,6 +2001,101 @@ onUnmounted(() => {
 .vowel-char.a { background: rgba(254, 202, 87, 0.3); color: #feca57; }
 .vowel-char.o { background: rgba(255, 107, 107, 0.3); color: #ff6b6b; }
 .vowel-char.unknown { background: rgba(136, 136, 136, 0.3); color: #888; }
+
+.vowel-char.selected {
+  box-shadow: 0 0 0 2px currentColor;
+  transform: scale(1.1);
+}
+
+.vowel-char:hover {
+  cursor: pointer;
+  filter: brightness(1.2);
+}
+
+/* 音节详情面板 */
+.syllable-detail {
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid #feca57;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 12px;
+}
+
+.detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #333;
+  gap: 8px;
+}
+
+.detail-vowel {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-weight: bold;
+  font-size: 1.1rem;
+}
+
+.detail-vowel.u { background: rgba(155, 89, 182, 0.5); color: #fff; }
+.detail-vowel.i { background: rgba(72, 219, 251, 0.5); color: #000; }
+.detail-vowel.e { background: rgba(46, 204, 113, 0.5); color: #000; }
+.detail-vowel.a { background: rgba(254, 202, 87, 0.5); color: #000; }
+.detail-vowel.o { background: rgba(255, 107, 107, 0.5); color: #fff; }
+.detail-vowel.unknown { background: rgba(136, 136, 136, 0.5); color: #fff; }
+
+.detail-title {
+  flex: 1;
+  color: #feca57;
+  font-size: 0.95rem;
+  font-weight: bold;
+}
+
+.detail-header h4 {
+  margin: 0;
+  color: #feca57;
+  font-size: 0.95rem;
+}
+
+.detail-header .close-btn {
+  background: transparent;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 1.2rem;
+  padding: 0 4px;
+}
+
+.detail-header .close-btn:hover {
+  color: #fff;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 8px;
+  border-radius: 4px;
+}
+
+.detail-label {
+  font-size: 0.75rem;
+  color: #888;
+  margin-bottom: 2px;
+}
+
+.detail-value {
+  font-size: 0.95rem;
+  color: #fff;
+  font-weight: bold;
+}
 
 /* 共振峰图 */
 .plot-container {
