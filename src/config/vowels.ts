@@ -44,12 +44,12 @@ export const DEFAULT_VOWEL_DETECTOR_CONFIG: Required<VowelDetectorConfig> = {
   fftSize: 2048,
   /** 采样率 */
   sampleRate: 44100,
-  /** 分帧时间 (ms)，每帧进行一次 FFT 分析 */
-  frameTime: 50,
+  /** 分帧时间 (ms)，每帧进行一次 FFT 分析。越小响应越快 */
+  frameTime: 30,
   /** 静音阈值 (dB)，低于此值视为静音。RMS 音量通常在 -60 ~ 0 范围 */
   silenceThreshold: -35,
-  /** 确认帧数，连续 N 帧相同结果才确认元音切换 */
-  confirmationFrames: 2,
+  /** 确认帧数，设为 1 实现即时响应，适合快速发音 */
+  confirmationFrames: 1,
   /** 元音共振峰配置 */
   vowelFormants: DEFAULT_VOWEL_FORMANTS
 };

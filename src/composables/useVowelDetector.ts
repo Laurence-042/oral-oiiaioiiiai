@@ -93,13 +93,12 @@ export function useVowelDetector(config?: VowelDetectorConfig): UseVowelDetector
   let animationFrameId: number | null = null;
   let lastAnalysisTime = 0;
   
-  // 稳定性过滤状态
-  let consecutiveVowelCount = 0;
-  let lastDetectedVowel: Vowel | null = null;
+  // 元音检测状态
+  let lastConfirmedVowel: Vowel | null = null;  // 上一次确认的元音
+  let hadGapSinceLastEmit = true;                // 上次触发后是否经过了静音间隔
   
   // 静音检测状态
   let silenceStartTime: number | null = null;
-  let lastVowelTime = 0;
 
   // ==================== 事件回调 ====================
   const vowelDetectedCallbacks: VowelDetectedCallback[] = [];
@@ -148,7 +147,8 @@ export function useVowelDetector(config?: VowelDetectorConfig): UseVowelDetector
       // 创建分析节点
       analyserNode = audioContext.createAnalyser();
       analyserNode.fftSize = cfg.fftSize;
-      analyserNode.smoothingTimeConstant = 0.3;
+      // 降低平滑系数，让频谱响应更灵敏（0 = 无平滑，1 = 最大平滑）
+      analyserNode.smoothingTimeConstant = 0.1;
 
       // 连接音频源到分析节点
       const source = audioContext.createMediaStreamSource(mediaStream);
@@ -335,85 +335,77 @@ export function useVowelDetector(config?: VowelDetectorConfig): UseVowelDetector
 
     // 判断是否静音
     if (volume < cfg.silenceThreshold) {
-      handleSilence(now);
-      currentResult.value = {
-        vowel: null,
-        status: 'silence',
-        confidence: 0,
-        formants: { f1: 0, f2: 0 },
-        volume,
-        timestamp: now
-      };
+      handleSilence(now, volume);
     } else {
       // 重置静音计时
-      if (silenceStartTime !== null) {
-        silenceStartTime = null;
-      }
+      silenceStartTime = null;
 
-      // 提取共振峰
+      // 提取共振峰并分类元音
       const formants = extractFormants(frequencyData);
-      
-      // 分类元音
       const { vowel, confidence } = classifyVowel(formants.f1, formants.f2);
 
-      // 确定检测状态
-      let status: DetectionStatus;
-      if (vowel !== null && confidence > 0.5) {
-        status = 'detected';
-      } else if (vowel !== null) {
-        status = 'ambiguous';
-      } else {
-        status = 'noise';
-      }
+      // 确定检测状态 - 降低置信度阈值，让识别更宽松
+      const status: DetectionStatus = 
+        vowel !== null && confidence > 0.4 ? 'detected' :
+        vowel !== null ? 'ambiguous' : 'noise';
 
       const result: VowelDetectionResult = {
-        vowel,
-        status,
-        confidence,
-        formants,
-        volume,
-        timestamp: now
+        vowel, status, confidence, formants, volume, timestamp: now
       };
-
       currentResult.value = result;
 
-      // 稳定性过滤：连续 N 帧相同结果才确认
-      if (vowel !== null && status === 'detected') {
-        if (vowel === lastDetectedVowel) {
-          consecutiveVowelCount++;
-        } else {
-          consecutiveVowelCount = 1;
-          lastDetectedVowel = vowel;
-        }
-
-        if (consecutiveVowelCount >= cfg.confirmationFrames) {
-          // 只在元音变化时触发事件
-          if (confirmedVowel.value !== vowel) {
-            confirmedVowel.value = vowel;
-            lastVowelTime = now;
-            emitVowelDetected(vowel, result);
-          }
-        }
+      // 处理元音检测结果
+      if (status === 'detected' && vowel !== null) {
+        handleVowelDetected(vowel, result, now);
       }
+      // 注意：不在 ambiguous/noise 时设置 hadGapSinceLastEmit
+      // 只有真正的静音才算间隔
     }
 
     animationFrameId = requestAnimationFrame(analyzeFrame);
   }
 
-  function handleSilence(now: number): void {
+  /**
+   * 处理检测到的元音
+   * 触发条件：
+   * 1. 元音发生变化（O→I, I→A 等）
+   * 2. 经过了静音间隔后的同一元音
+   */
+  function handleVowelDetected(vowel: Vowel, result: VowelDetectionResult, now: number): void {
+    const isNewVowel = vowel !== lastConfirmedVowel;
+    
+    // 触发条件：元音变化 或 经过了静音间隔
+    if (isNewVowel || hadGapSinceLastEmit) {
+      confirmedVowel.value = vowel;
+      lastConfirmedVowel = vowel;
+      hadGapSinceLastEmit = false;
+      emitVowelDetected(vowel, result);
+    }
+  }
+
+  /**
+   * 处理静音
+   */
+  function handleSilence(now: number, volume: number): void {
     if (silenceStartTime === null) {
       silenceStartTime = now;
     } else {
-      const silenceDuration = now - silenceStartTime;
-      emitSilence(silenceDuration);
+      emitSilence(now - silenceStartTime);
     }
     
-    // 清除确认的元音
-    if (confirmedVowel.value !== null) {
-      confirmedVowel.value = null;
-      lastDetectedVowel = null;
-      consecutiveVowelCount = 0;
-    }
+    currentResult.value = {
+      vowel: null,
+      status: 'silence',
+      confidence: 0,
+      formants: { f1: 0, f2: 0 },
+      volume,
+      timestamp: now
+    };
+    
+    // 静音标记为间隔，清除当前元音
+    hadGapSinceLastEmit = true;
+    confirmedVowel.value = null;
+    lastConfirmedVowel = null;
   }
 
   // ==================== 控制方法 ====================
@@ -446,8 +438,8 @@ export function useVowelDetector(config?: VowelDetectorConfig): UseVowelDetector
     }
     
     confirmedVowel.value = null;
-    lastDetectedVowel = null;
-    consecutiveVowelCount = 0;
+    lastConfirmedVowel = null;
+    hadGapSinceLastEmit = true;
   }
 
   function reset(): void {
