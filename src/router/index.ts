@@ -14,6 +14,12 @@ const router = createRouter({
       meta: { title: '元音识别调试' }
     },
     {
+      path: '/analyzer',
+      name: 'analyzer',
+      component: () => import('@/views/AudioAnalyzer.vue'),
+      meta: { title: '音频分析工具' }
+    },
+    {
       path: '/game',
       name: 'game',
       component: () => import('@/views/DebugView.vue'), // 暂时指向 DebugView
