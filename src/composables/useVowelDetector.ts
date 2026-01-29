@@ -221,9 +221,10 @@ export function useVowelDetector(config?: VowelDetectorConfig): UseVowelDetector
     type VowelDistance = { vowel: Vowel; distance: number; inRange: boolean };
     const distances: VowelDistance[] = [];
 
-    // 计算到每个元音特征区域的距离
-    for (const vowel of ['O', 'I', 'A'] as Vowel[]) {
+    // 计算到每个元音特征区域的距离（支持 5 个元音）
+    for (const vowel of ['U', 'I', 'E', 'A', 'O'] as Vowel[]) {
       const range = formants[vowel];
+      if (!range) continue; // 跳过未配置的元音
       
       // 计算特征区域中心
       const centerF1 = (range.f1[0] + range.f1[1]) / 2;
@@ -253,6 +254,7 @@ export function useVowelDetector(config?: VowelDetectorConfig): UseVowelDetector
     });
 
     const best = distances[0];
+    if (!best) return { vowel: null, confidence: 0 };
     
     // 计算置信度（距离越小，置信度越高）
     // 在范围内时置信度至少 0.7，距离为 0 时置信度为 1

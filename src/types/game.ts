@@ -1,7 +1,14 @@
 // ==================== 元音检测相关类型 ====================
 
-/** 元音类型 */
-export type Vowel = 'O' | 'I' | 'A';
+/** 
+ * 元音类型
+ * - U: /u/ 如 "oo" in "boot"
+ * - I: /i/ 如 "ee" in "see"
+ * - E: /e/ 如 "e" in "bed" (可选)
+ * - A: /ɑ/ 如 "ah" in "father"
+ * - O: /oʊ/ 如 "o" in "go"
+ */
+export type Vowel = 'U' | 'I' | 'E' | 'A' | 'O';
 
 /** 检测结果状态 */
 export type DetectionStatus = 'detected' | 'silence' | 'noise' | 'ambiguous';
@@ -32,11 +39,7 @@ export interface VowelFormantRange {
 }
 
 /** 元音共振峰配置 */
-export interface VowelFormantConfig {
-  O: VowelFormantRange;
-  I: VowelFormantRange;
-  A: VowelFormantRange;
-}
+export type VowelFormantConfig = Record<Vowel, VowelFormantRange>;
 
 /** 元音识别配置 */
 export interface VowelDetectorConfig {

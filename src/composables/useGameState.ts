@@ -14,14 +14,13 @@ import type {
   ScoreUpdateCallback
 } from '@/types/game';
 import {
-  STAGE_THRESHOLDS,
   calculateStage,
   getStageName,
   calculateComboMultiplier,
   TIMING_CONFIG,
   SCORE_CONFIG
 } from '@/config/stages';
-import { TARGET_SEQUENCE } from '@/config/vowels';
+import { getTargetSequence } from '@/config/vowels';
 
 /**
  * useGameState Hook 返回类型
@@ -40,6 +39,7 @@ export interface UseGameStateReturn {
   /** 动作方法 */
   startGame: () => void;
   processVowel: (vowel: Vowel) => void;
+  handleSilence: (duration: number) => void;
   interrupt: (reason: InterruptReason) => void;
   showShare: () => void;
   reset: () => void;
@@ -132,7 +132,7 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
   const isPlaying = computed(() => state.value === 'playing');
 
   const sequenceProgress = computed(() => {
-    return stats.value.sequenceIndex / TARGET_SEQUENCE.length;
+    return stats.value.sequenceIndex / getTargetSequence().length;
   });
 
   // ==================== 内部状态 ====================
@@ -230,8 +230,9 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
       ? now - stats.value.lastVowelTime 
       : 0;
     
-    // 获取期望的元音
-    const expectedVowel = TARGET_SEQUENCE[stats.value.sequenceIndex];
+    // 获取期望的元音（动态序列）
+    const sequence = getTargetSequence();
+    const expectedVowel = sequence[stats.value.sequenceIndex];
     
     // 自由模式：任意元音都算正确
     if (freeMode.value.enabled && freeMode.value.anyVowelMode) {
@@ -261,9 +262,10 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     stats.value.lastVowelTime = now;
     
     // 推进序列
-    stats.value.sequenceIndex = (stats.value.sequenceIndex + 1) % TARGET_SEQUENCE.length;
+    const sequence = getTargetSequence();
+    stats.value.sequenceIndex = (stats.value.sequenceIndex + 1) % sequence.length;
     
-    // 检查完美循环（完成一轮 oiiaioiiiai）
+    // 检查完美循环（完成一轮序列）
     if (stats.value.sequenceIndex === 0) {
       stats.value.score += cfg.perfectCycleBonus;
       stats.value.perfectCycles++;
@@ -418,6 +420,7 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     sequenceProgress,
     startGame,
     processVowel,
+    handleSilence,
     interrupt,
     showShare,
     reset,

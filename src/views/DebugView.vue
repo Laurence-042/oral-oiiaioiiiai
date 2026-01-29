@@ -29,8 +29,9 @@
     <div class="main-display">
       <!-- 当前元音 -->
       <div class="vowel-display" :class="confirmedVowel?.toLowerCase()">
-        <span class="vowel-label">当前元音</span>
-        <span class="vowel-char">{{ confirmedVowel || '-' }}</span>
+        <span class="vowel-label">当前发音</span>
+        <span class="vowel-char">{{ confirmedVowel ?? '-' }}</span>
+        <span class="vowel-hint" v-if="confirmedVowel">下一个: {{ currentHint }}</span>
         <span class="vowel-confidence" v-if="currentResult">
           置信度: {{ (currentResult.confidence * 100).toFixed(0) }}%
         </span>
@@ -38,10 +39,10 @@
 
       <!-- 序列进度 -->
       <div class="sequence-display">
-        <span class="sequence-label">目标序列</span>
+        <span class="sequence-label">{{ currentPreset.name }}: {{ currentPreset.description }}</span>
         <div class="sequence-chars">
           <span 
-            v-for="(char, index) in targetSequence" 
+            v-for="(hint, index) in pronunciationHints" 
             :key="index"
             class="seq-char"
             :class="{ 
@@ -49,7 +50,7 @@
               'done': index < stats.sequenceIndex || (stats.sequenceIndex === 0 && stats.perfectCycles > 0)
             }"
           >
-            {{ char }}
+            {{ hint }}
           </span>
         </div>
         <span class="cycle-count">完美循环: {{ stats.perfectCycles }} 次</span>
@@ -200,10 +201,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import { useVowelDetector } from '@/composables/useVowelDetector';
 import { useGameState } from '@/composables/useGameState';
-import { TARGET_SEQUENCE } from '@/config/vowels';
+import { getTargetSequence, getPronunciationHints, getCurrentPreset } from '@/config/vowels';
 import type { GameState, DetectionStatus } from '@/types/game';
 
 // ==================== Composables ====================
@@ -211,11 +212,9 @@ const {
   currentResult,
   confirmedVowel,
   isListening,
-  isInitialized,
   error,
   start,
   stop,
-  reset: resetDetector,
   onVowelDetected,
   onSilence,
   onError,
@@ -225,12 +224,10 @@ const {
 const {
   state,
   stats,
-  isPlaying,
   startGame,
   processVowel,
   interrupt,
   reset: resetGame,
-  freeMode,
   onStageChange,
   onComboBreak,
   onPerfectCycle,
@@ -238,11 +235,19 @@ const {
 } = useGameState();
 
 // ==================== 状态 ====================
-const targetSequence = TARGET_SEQUENCE;
+// 使用动态序列
+const pronunciationHints = computed(() => getPronunciationHints());
+const currentPreset = computed(() => getCurrentPreset());
 const logs = ref<{ time: string; message: string; type: string }[]>([]);
 const logContainer = ref<HTMLDivElement | null>(null);
 const spectrumCanvas = ref<HTMLCanvasElement | null>(null);
 let animationId: number | null = null;
+
+// 当前发音提示（根据序列位置）
+const currentHint = computed(() => {
+  const hints = getPronunciationHints();
+  return hints[stats.value.sequenceIndex] ?? '-';
+});
 
 // 游戏状态文字
 const gameStatusClass = computed(() => {
@@ -315,12 +320,15 @@ function clearLogs() {
 }
 
 // ==================== 自动游戏控制 ====================
-// 检测到 "O" 时自动开始游戏
+// 检测到序列第一个元音时自动开始游戏
 onVowelDetected((vowel, result) => {
   addLog(`检测到元音: ${vowel} (置信度: ${(result.confidence * 100).toFixed(0)}%)`, 'vowel');
   
-  // 如果游戏未开始或已中断，检测到 O 时自动开始
-  if ((state.value === 'idle' || state.value === 'interrupted') && vowel === 'O') {
+  // 获取序列的第一个元音
+  const firstVowel = getTargetSequence()[0];
+  
+  // 如果游戏未开始或已中断，检测到序列第一个元音时自动开始
+  if ((state.value === 'idle' || state.value === 'interrupted') && vowel === firstVowel) {
     startGame();
     addLog('🎮 游戏自动开始！', 'success');
   }
@@ -633,6 +641,13 @@ onUnmounted(() => {
   font-size: 4rem;
   font-weight: bold;
   line-height: 1;
+}
+
+.vowel-hint {
+  display: block;
+  font-size: 0.9rem;
+  color: #48dbfb;
+  margin-top: 8px;
 }
 
 .vowel-confidence {
