@@ -2,18 +2,43 @@
   <div class="analyzer-view">
     <header class="analyzer-header">
       <h1>🔬 音频特征分析工具</h1>
-      <p class="subtitle">分析标准发音音频，提取元音共振峰特征</p>
+      <p class="subtitle">分析发音音频，提取元音共振峰特征</p>
     </header>
 
     <!-- 控制面板 -->
     <section class="control-panel">
-      <button class="btn btn-primary" @click="loadAndAnalyze" :disabled="isAnalyzing">
-        {{ isAnalyzing ? '⏳ 分析中...' : '📂 加载并分析 oiia-oiia-sound.mp3' }}
-      </button>
-      <button class="btn btn-secondary" @click="exportResults" :disabled="!analysisResults.length">
-        📋 导出结果
-      </button>
+      <div class="control-row">
+        <button class="btn btn-primary" @click="loadDefaultAudio" :disabled="isAnalyzing">
+          📂 加载示例音频
+        </button>
+        <label class="btn btn-secondary file-input-label">
+          📁 选择音频文件
+          <input type="file" accept="audio/*" @change="handleFileSelect" hidden :disabled="isAnalyzing" />
+        </label>
+        <button 
+          class="btn" 
+          :class="isRecording ? 'btn-danger' : 'btn-success'"
+          @click="toggleRecording"
+          :disabled="isAnalyzing"
+        >
+          {{ isRecording ? '⏹️ 停止录制' : '🎤 开始录制' }}
+        </button>
+      </div>
+      <div class="control-row">
+        <button class="btn btn-secondary" @click="exportAllResults" :disabled="!allAnalysisResults.length">
+          📋 导出全部结果
+        </button>
+        <button class="btn btn-secondary" @click="clearAllAudios" :disabled="!audioTracks.length">
+          🗑️ 清除全部音频
+        </button>
+      </div>
     </section>
+
+    <!-- 录制状态 -->
+    <div v-if="isRecording" class="recording-indicator">
+      <span class="recording-dot"></span>
+      录制中... {{ recordingDuration.toFixed(1) }}s
+    </div>
 
     <!-- 分析参数 -->
     <section class="params-section">
@@ -33,7 +58,7 @@
         </label>
         <label>
           能量阈值倍数:
-          <input type="number" v-model.number="params.energyThresholdMultiplier" min="1" max="10" step="0.5" />
+          <input type="number" v-model.number="params.energyThresholdMultiplier" min="1" max="5000" step="100" />
         </label>
       </div>
     </section>
@@ -43,162 +68,169 @@
       {{ status }}
     </div>
 
-    <!-- 波形显示 -->
-    <section class="waveform-section" v-if="audioBuffer">
-      <h2>📊 音频波形</h2>
-      <div class="waveform-container" 
-           @mousemove="handleWaveformMouseMove" 
-           @mouseleave="handleWaveformMouseLeave"
-           @click="handleWaveformClick">
-        <canvas ref="waveformCanvas" width="1200" height="150"></canvas>
-        <!-- 光标线 -->
-        <div v-if="cursorInfo.visible" 
-             class="cursor-line" 
-             :style="{ left: `${cursorInfo.x}px` }">
-          <div class="cursor-time">{{ cursorInfo.timeMs.toFixed(1) }}ms</div>
-        </div>
-        <!-- 点击标记 -->
-        <div v-for="(mark, idx) in clickMarks" 
-             :key="idx" 
-             class="click-mark"
-             :style="{ left: `${mark.x}px` }">
-          <div class="mark-time">{{ mark.timeMs.toFixed(1) }}ms</div>
-        </div>
-      </div>
-      <div class="time-markers">
-        <span>0s</span>
-        <span>{{ (audioBuffer.duration / 2).toFixed(2) }}s</span>
-        <span>{{ audioBuffer.duration.toFixed(2) }}s</span>
-      </div>
-      <div class="cursor-controls" v-if="clickMarks.length">
-        <span class="marks-info">已标记 {{ clickMarks.length }} 个点</span>
-        <button class="btn btn-small" @click="clearClickMarks">清除标记</button>
-      </div>
-    </section>
-
-    <!-- 检测到的序列 -->
-    <section class="sequences-section" v-if="sequences.length">
-      <h2>🎵 检测到的发音序列 ({{ sequences.length }} 个)</h2>
-      <div class="sequences-container">
-        <div v-for="(seq, seqIdx) in sequences" :key="seqIdx" class="sequence-card">
-          <div class="sequence-header">
-            <h3>序列 {{ seqIdx + 1 }}</h3>
-            <span class="sequence-time">{{ seq.start.toFixed(2) }}s - {{ seq.end.toFixed(2) }}s ({{ ((seq.end - seq.start) * 1000).toFixed(0) }}ms)</span>
-            <span class="syllable-count">{{ seq.syllables.length }} 个音节</span>
+    <!-- 音频轨道列表 -->
+    <div class="audio-tracks">
+      <section 
+        v-for="(track, trackIdx) in audioTracks" 
+        :key="track.id" 
+        class="audio-track"
+        :class="{ expanded: track.expanded }"
+      >
+        <div class="track-header" @click="toggleTrackExpanded(trackIdx)">
+          <span class="track-icon">{{ track.expanded ? '▼' : '▶' }}</span>
+          <h2>{{ track.name }}</h2>
+          <span class="track-info">{{ track.buffer.duration.toFixed(2) }}s | {{ track.sequences.length }} 序列 | {{ track.results.length }} 音节</span>
+          <div class="track-actions" @click.stop>
+            <button class="btn btn-small" @click="reanalyzeTrack(trackIdx)" :disabled="isAnalyzing">
+              🔄 重新分析
+            </button>
+            <button class="btn btn-small btn-danger" @click="removeTrack(trackIdx)">
+              ✕
+            </button>
           </div>
-          
-          <!-- 音节时间线 -->
-          <div class="syllables-timeline">
-            <div 
-              v-for="(syl, sylIdx) in seq.syllables" 
-              :key="sylIdx"
-              class="syllable-marker"
-              :class="[syl.guessedVowel?.toLowerCase() || 'unknown', { selected: selectedSyllable?.seqIdx === seqIdx && selectedSyllable?.sylIdx === sylIdx }]"
-              :style="{ 
-                left: `${((syl.start - seq.start) / (seq.end - seq.start)) * 100}%`, 
-                width: `${((syl.end - syl.start) / (seq.end - seq.start)) * 100}%` 
-              }"
-              @click="selectSyllable(seqIdx, sylIdx)"
-            >
-              {{ syl.guessedVowel || '?' }}
+        </div>
+
+        <div class="track-content" v-show="track.expanded">
+          <!-- 波形显示 -->
+          <div class="waveform-section">
+            <h3>📊 音频波形</h3>
+            <div class="waveform-container" 
+                 @mousemove="(e) => handleWaveformMouseMove(e, trackIdx)"
+                 @mouseleave="handleWaveformMouseLeave"
+                 @click="(e) => handleWaveformClick(e, trackIdx)">
+              <canvas :ref="el => setCanvasRef(el, trackIdx, 'waveform')" width="1200" height="150"></canvas>
+              <!-- 光标线 -->
+              <div v-if="cursorInfo.visible && cursorInfo.trackIdx === trackIdx" 
+                   class="cursor-line" 
+                   :style="{ left: `${cursorInfo.x}px` }">
+                <div class="cursor-time">{{ cursorInfo.timeMs.toFixed(1) }}ms</div>
+              </div>
+              <!-- 分割标记 -->
+              <div v-for="(mark, idx) in track.splitMarks" 
+                   :key="idx" 
+                   class="split-mark"
+                   :style="{ left: `${mark.xPercent}%` }">
+                <div class="mark-time">{{ mark.timeMs.toFixed(0) }}ms</div>
+                <button class="mark-remove" @click.stop="removeSplitMark(trackIdx, idx)">✕</button>
+              </div>
+            </div>
+            <div class="time-markers">
+              <span>0s</span>
+              <span>{{ (track.buffer.duration / 2).toFixed(2) }}s</span>
+              <span>{{ track.buffer.duration.toFixed(2) }}s</span>
+            </div>
+            <div class="waveform-controls" v-if="track.splitMarks.length">
+              <span class="marks-info">{{ track.splitMarks.length }} 个分割点</span>
+              <button class="btn btn-small" @click="clearSplitMarks(trackIdx)">清除标记</button>
+              <button class="btn btn-small btn-primary" @click="exportSplitAudio(trackIdx)">
+                📤 导出分割音频
+              </button>
             </div>
           </div>
-          
-          <!-- 识别结果 -->
-          <div class="sequence-result">
-            <span class="label">识别序列:</span>
-            <span class="vowel-sequence">
-              <span 
-                v-for="(syl, sylIdx) in seq.syllables" 
-                :key="sylIdx" 
-                class="vowel-char"
-                :class="syl.guessedVowel?.toLowerCase() || 'unknown'"
-              >{{ syl.guessedVowel || '?' }}</span>
-            </span>
+
+          <!-- 检测到的序列 -->
+          <div class="sequences-section" v-if="track.sequences.length">
+            <h3>🎵 检测到的发音序列 ({{ track.sequences.length }} 个)</h3>
+            <div class="sequences-container">
+              <div v-for="(seq, seqIdx) in track.sequences" :key="seqIdx" class="sequence-card">
+                <div class="sequence-header">
+                  <span class="sequence-label">序列 {{ seqIdx + 1 }}</span>
+                  <span class="sequence-time">{{ (seq.start * 1000).toFixed(0) }}ms - {{ (seq.end * 1000).toFixed(0) }}ms</span>
+                  <span class="syllable-count">{{ seq.syllables.length }} 音节</span>
+                </div>
+                <div class="syllables-timeline">
+                  <div 
+                    v-for="(syl, sylIdx) in seq.syllables" 
+                    :key="sylIdx"
+                    class="syllable-marker"
+                    :class="[syl.guessedVowel?.toLowerCase() || 'unknown']"
+                    :style="{ 
+                      left: `${((syl.start - seq.start) / (seq.end - seq.start)) * 100}%`, 
+                      width: `${Math.max(2, ((syl.end - syl.start) / (seq.end - seq.start)) * 100)}%` 
+                    }"
+                    :title="`${syl.guessedVowel || '?'}: F1=${syl.f1.toFixed(0)}Hz, F2=${syl.f2.toFixed(0)}Hz`"
+                  >
+                    {{ syl.guessedVowel || '?' }}
+                  </div>
+                </div>
+                <div class="sequence-result">
+                  <span class="label">识别:</span>
+                  <span class="vowel-sequence">
+                    <span 
+                      v-for="(syl, sylIdx) in seq.syllables" 
+                      :key="sylIdx" 
+                      class="vowel-char"
+                      :class="syl.guessedVowel?.toLowerCase() || 'unknown'"
+                    >{{ syl.guessedVowel || '?' }}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 共振峰散点图 -->
+          <div class="formant-plot-section" v-if="track.results.length">
+            <h3>📈 共振峰分布图</h3>
+            <div class="plot-container">
+              <canvas :ref="el => setCanvasRef(el, trackIdx, 'formant')" width="500" height="400"></canvas>
+              <div class="plot-legend">
+                <div class="legend-item"><span class="dot u"></span> U (oo)</div>
+                <div class="legend-item"><span class="dot i"></span> I (ee)</div>
+                <div class="legend-item"><span class="dot a"></span> A (ah)</div>
+                <div class="legend-item"><span class="dot o"></span> O (oh)</div>
+                <div class="legend-item"><span class="dot unknown"></span> 未分类</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 元音统计 -->
+          <div class="stats-section" v-if="track.stats && Object.keys(track.stats).length">
+            <h3>📊 元音统计</h3>
+            <div class="stats-grid">
+              <div class="stat-card" v-for="(stat, vowel) in track.stats" :key="vowel">
+                <h4 class="vowel-label" :class="vowel.toLowerCase()">{{ vowel }}</h4>
+                <div class="stat-row">
+                  <span>数量:</span>
+                  <strong>{{ stat.count }}</strong>
+                </div>
+                <div class="stat-row">
+                  <span>F1:</span>
+                  <strong>{{ stat.f1Min.toFixed(0) }}-{{ stat.f1Max.toFixed(0) }} Hz</strong>
+                </div>
+                <div class="stat-row">
+                  <span>F2:</span>
+                  <strong>{{ stat.f2Min.toFixed(0) }}-{{ stat.f2Max.toFixed(0) }} Hz</strong>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
+    </div>
 
-    <!-- 选中音节详情 -->
-    <section class="syllable-detail" v-if="selectedSyllableData">
-      <h2>🔍 音节详情</h2>
-      <div class="detail-grid">
-        <div class="detail-item">
-          <label>时间:</label>
-          <span>{{ selectedSyllableData.start.toFixed(3) }}s - {{ selectedSyllableData.end.toFixed(3) }}s</span>
-        </div>
-        <div class="detail-item">
-          <label>时长:</label>
-          <span>{{ ((selectedSyllableData.end - selectedSyllableData.start) * 1000).toFixed(1) }}ms</span>
-        </div>
-        <div class="detail-item">
-          <label>F1:</label>
-          <span>{{ selectedSyllableData.f1.toFixed(0) }} Hz</span>
-        </div>
-        <div class="detail-item">
-          <label>F2:</label>
-          <span>{{ selectedSyllableData.f2.toFixed(0) }} Hz</span>
-        </div>
-        <div class="detail-item">
-          <label>音量:</label>
-          <span>{{ selectedSyllableData.volume.toFixed(1) }} dB</span>
-        </div>
-        <div class="detail-item">
-          <label>推测元音:</label>
-          <span class="vowel-badge" :class="selectedSyllableData.guessedVowel?.toLowerCase()">
-            {{ selectedSyllableData.guessedVowel || '?' }}
-          </span>
-        </div>
-        <div class="detail-item">
-          <label>当前配置匹配:</label>
-          <span>{{ selectedSyllableData.currentMatch || '无' }}</span>
-        </div>
-      </div>
-    </section>
-
-    <!-- 共振峰散点图 -->
-    <section class="formant-plot-section" v-if="analysisResults.length">
-      <h2>📈 共振峰分布图 (F1 vs F2)</h2>
-      <div class="plot-container">
-        <canvas ref="formantPlotCanvas" width="600" height="500"></canvas>
-        <div class="plot-legend">
-          <div class="legend-item"><span class="dot u"></span> U (oo)</div>
-          <div class="legend-item"><span class="dot i"></span> I (ee)</div>
-          <div class="legend-item"><span class="dot a"></span> A (ah)</div>
-          <div class="legend-item"><span class="dot o"></span> O (oh)</div>
-          <div class="legend-item"><span class="dot unknown"></span> 未分类</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- 分析结果表格 -->
-    <section class="results-section" v-if="analysisResults.length">
-      <h2>📋 详细分析结果 ({{ analysisResults.length }} 个音节)</h2>
+    <!-- 汇总结果表格 -->
+    <section class="results-section" v-if="allAnalysisResults.length">
+      <h2>📋 详细分析结果汇总 ({{ allAnalysisResults.length }} 个音节)</h2>
       <table class="results-table">
         <thead>
           <tr>
+            <th>音频</th>
             <th>序列</th>
             <th>#</th>
-            <th>时间 (s)</th>
+            <th>时间 (ms)</th>
             <th>时长 (ms)</th>
             <th>F1 (Hz)</th>
             <th>F2 (Hz)</th>
             <th>音量 (dB)</th>
             <th>推测元音</th>
-            <th>当前配置匹配</th>
           </tr>
         </thead>
         <tbody>
-          <tr 
-            v-for="(result, i) in analysisResults" 
-            :key="i" 
-            :class="{ highlight: selectedSyllable?.seqIdx === result.seqIdx && selectedSyllable?.sylIdx === result.sylIdx }"
-            @click="selectSyllable(result.seqIdx, result.sylIdx)"
-          >
+          <tr v-for="(result, i) in allAnalysisResults" :key="i">
+            <td>{{ result.trackName }}</td>
             <td>{{ result.seqIdx + 1 }}</td>
             <td>{{ result.sylIdx + 1 }}</td>
-            <td>{{ result.time.toFixed(3) }}</td>
+            <td>{{ (result.time * 1000).toFixed(0) }}</td>
             <td>{{ result.duration.toFixed(0) }}</td>
             <td>{{ result.f1.toFixed(0) }}</td>
             <td>{{ result.f2.toFixed(0) }}</td>
@@ -206,42 +238,9 @@
             <td class="vowel-cell" :class="result.guessedVowel?.toLowerCase()">
               {{ result.guessedVowel || '?' }}
             </td>
-            <td class="match-cell" :class="result.currentMatch ? 'match' : 'no-match'">
-              {{ result.currentMatch || '无' }}
-            </td>
           </tr>
         </tbody>
       </table>
-    </section>
-
-    <!-- 统计摘要 -->
-    <section class="summary-section" v-if="vowelStats">
-      <h2>📊 元音统计摘要</h2>
-      <div class="stats-grid">
-        <div class="stat-card" v-for="(stat, vowel) in vowelStats" :key="vowel">
-          <h3 class="vowel-label" :class="vowel.toLowerCase()">{{ vowel }}</h3>
-          <div class="stat-row">
-            <span>样本数:</span>
-            <strong>{{ stat.count }}</strong>
-          </div>
-          <div class="stat-row">
-            <span>F1 范围:</span>
-            <strong>{{ stat.f1Min.toFixed(0) }} - {{ stat.f1Max.toFixed(0) }} Hz</strong>
-          </div>
-          <div class="stat-row">
-            <span>F1 平均:</span>
-            <strong>{{ stat.f1Avg.toFixed(0) }} Hz</strong>
-          </div>
-          <div class="stat-row">
-            <span>F2 范围:</span>
-            <strong>{{ stat.f2Min.toFixed(0) }} - {{ stat.f2Max.toFixed(0) }} Hz</strong>
-          </div>
-          <div class="stat-row">
-            <span>F2 平均:</span>
-            <strong>{{ stat.f2Avg.toFixed(0) }} Hz</strong>
-          </div>
-        </div>
-      </div>
     </section>
 
     <!-- 建议配置 -->
@@ -254,8 +253,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, reactive } from 'vue';
-import { DEFAULT_VOWEL_FORMANTS } from '@/config/vowels';
+import { ref, computed, reactive, nextTick, onUnmounted, type ComponentPublicInstance } from 'vue';
+import { DEFAULT_VOWEL_FORMANTS, SYLLABLE_DETECTION_CONFIG } from '@/config/vowels';
 
 // ==================== 类型定义 ====================
 interface Syllable {
@@ -265,7 +264,6 @@ interface Syllable {
   f2: number;
   volume: number;
   guessedVowel: string | null;
-  currentMatch: string | null;
 }
 
 interface Sequence {
@@ -275,6 +273,8 @@ interface Sequence {
 }
 
 interface AnalysisResult extends Syllable {
+  trackId: string;
+  trackName: string;
   seqIdx: number;
   sylIdx: number;
   time: number;
@@ -289,53 +289,66 @@ interface VowelStat {
   f2Min: number;
   f2Max: number;
   f2Avg: number;
-  samples: { f1: number; f2: number }[];
+}
+
+interface SplitMark {
+  timeMs: number;
+  xPercent: number;
+}
+
+interface AudioTrack {
+  id: string;
+  name: string;
+  buffer: AudioBuffer;
+  sequences: Sequence[];
+  results: AnalysisResult[];
+  stats: Record<string, VowelStat> | null;
+  splitMarks: SplitMark[];
+  expanded: boolean;
 }
 
 // ==================== 分析参数 ====================
-const params = reactive({
-  sequenceGapMs: 300,          // 序列之间的最小间隔 (ms)
-  syllableGapMs: 20,           // 音节之间的最小间隔 (ms)
-  minSyllableDurationMs: 30,   // 最小音节时长 (ms)
-  energyThresholdMultiplier: 1800 // 能量阈值倍数
-});
+const params = reactive({ ...SYLLABLE_DETECTION_CONFIG });
 
 // ==================== 状态 ====================
 const isAnalyzing = ref(false);
+const isRecording = ref(false);
+const recordingDuration = ref(0);
 const status = ref('');
 const statusType = ref<'info' | 'success' | 'error'>('info');
-const audioBuffer = ref<AudioBuffer | null>(null);
-const sequences = ref<Sequence[]>([]);
-const analysisResults = ref<AnalysisResult[]>([]);
-const selectedSyllable = ref<{ seqIdx: number; sylIdx: number } | null>(null);
 
-const waveformCanvas = ref<HTMLCanvasElement | null>(null);
-const formantPlotCanvas = ref<HTMLCanvasElement | null>(null);
-
-// 光标状态
+const audioTracks = ref<AudioTrack[]>([]);
 const cursorInfo = ref({
   visible: false,
   x: 0,
-  timeMs: 0
-});
-const clickMarks = ref<{ x: number; timeMs: number }[]>([]);
-
-// ==================== 计算属性 ====================
-const selectedSyllableData = computed(() => {
-  if (!selectedSyllable.value) return null;
-  const { seqIdx, sylIdx } = selectedSyllable.value;
-  const seq = sequences.value[seqIdx];
-  if (!seq) return null;
-  return seq.syllables[sylIdx] || null;
+  timeMs: 0,
+  trackIdx: -1
 });
 
+// Canvas refs
+const canvasRefs = reactive<Record<string, HTMLCanvasElement | null>>({});
+
+// 录制相关
+let mediaRecorder: MediaRecorder | null = null;
+let recordedChunks: Blob[] = [];
+let recordingInterval: ReturnType<typeof setInterval> | null = null;
+let recordingStartTime = 0;
+
 // ==================== 计算属性 ====================
-const vowelStats = computed(() => {
-  if (!analysisResults.value.length) return null;
+const allAnalysisResults = computed(() => {
+  const results: AnalysisResult[] = [];
+  for (const track of audioTracks.value) {
+    results.push(...track.results);
+  }
+  return results;
+});
+
+const allVowelStats = computed(() => {
+  if (!allAnalysisResults.value.length) return null;
   
   const stats: Record<string, VowelStat> = {};
   
-  for (const result of analysisResults.value) {
+  for (const result of allAnalysisResults.value) {
     const vowel = result.guessedVowel;
     if (!vowel) continue;
     
@@ -347,8 +360,7 @@ const vowelStats = computed(() => {
         f1Avg: 0,
         f2Min: Infinity,
         f2Max: -Infinity,
-        f2Avg: 0,
-        samples: []
+        f2Avg: 0
       };
     }
     
@@ -358,31 +370,27 @@ const vowelStats = computed(() => {
     s.f1Max = Math.max(s.f1Max, result.f1);
     s.f2Min = Math.min(s.f2Min, result.f2);
     s.f2Max = Math.max(s.f2Max, result.f2);
-    s.samples.push({ f1: result.f1, f2: result.f2 });
+    s.f1Avg += result.f1;
+    s.f2Avg += result.f2;
   }
   
-  // 计算平均值
   for (const vowel in stats) {
-    const s = stats[vowel];
-    s.f1Avg = s.samples.reduce((sum, p) => sum + p.f1, 0) / s.count;
-    s.f2Avg = s.samples.reduce((sum, p) => sum + p.f2, 0) / s.count;
+    stats[vowel].f1Avg /= stats[vowel].count;
+    stats[vowel].f2Avg /= stats[vowel].count;
   }
   
   return stats;
 });
 
 const suggestedConfig = computed(() => {
-  if (!vowelStats.value) return null;
+  if (!allVowelStats.value) return null;
   
   const config: Record<string, { f1: [number, number]; f2: [number, number] }> = {};
   
-  for (const vowel in vowelStats.value) {
-    const s = vowelStats.value[vowel];
-    // 扩展范围 20% 作为容差
-    const f1Range = s.f1Max - s.f1Min;
-    const f2Range = s.f2Max - s.f2Min;
-    const f1Margin = Math.max(50, f1Range * 0.2);
-    const f2Margin = Math.max(100, f2Range * 0.2);
+  for (const vowel in allVowelStats.value) {
+    const s = allVowelStats.value[vowel];
+    const f1Margin = Math.max(50, (s.f1Max - s.f1Min) * 0.2);
+    const f2Margin = Math.max(100, (s.f2Max - s.f2Min) * 0.2);
     
     config[vowel] = {
       f1: [Math.round(s.f1Min - f1Margin), Math.round(s.f1Max + f1Margin)],
@@ -393,49 +401,33 @@ const suggestedConfig = computed(() => {
   return `export const SUGGESTED_VOWEL_FORMANTS: VowelFormantConfig = ${JSON.stringify(config, null, 2)};`;
 });
 
-// ==================== 方法 ====================
-function selectSyllable(seqIdx: number, sylIdx: number) {
-  selectedSyllable.value = { seqIdx, sylIdx };
+// ==================== Canvas Refs 管理 ====================
+function setCanvasRef(el: Element | ComponentPublicInstance | null, trackIdx: number, type: 'waveform' | 'formant') {
+  const key = `${trackIdx}-${type}`;
+  if (el && el instanceof HTMLCanvasElement) {
+    canvasRefs[key] = el;
+  }
 }
 
-async function loadAndAnalyze() {
+function getCanvasRef(trackIdx: number, type: 'waveform' | 'formant'): HTMLCanvasElement | null {
+  return canvasRefs[`${trackIdx}-${type}`] || null;
+}
+
+// ==================== 音频加载 ====================
+async function loadDefaultAudio() {
   isAnalyzing.value = true;
-  status.value = '正在加载音频文件...';
+  status.value = '正在加载示例音频...';
   statusType.value = 'info';
-  selectedSyllable.value = null;
   
   try {
-    // 加载音频文件
     const response = await fetch('/oiia-oiia-sound.mp3');
-    if (!response.ok) {
-      throw new Error(`无法加载音频文件: ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`无法加载: ${response.status}`);
     
     const arrayBuffer = await response.arrayBuffer();
-    const audioContext = new AudioContext({ sampleRate: 44100 });
-    audioBuffer.value = await audioContext.decodeAudioData(arrayBuffer);
+    await addAudioTrack(arrayBuffer, 'oiia-oiia-sound.mp3');
     
-    status.value = `音频已加载: ${audioBuffer.value.duration.toFixed(2)}s, ${audioBuffer.value.sampleRate}Hz`;
-    
-    await nextTick();
-    drawWaveform();
-    
-    // 两级检测：先检测序列，再检测音节
-    status.value = '正在检测发音序列和音节...';
-    sequences.value = detectSequencesAndSyllables(audioBuffer.value);
-    
-    // 分析每个音节的共振峰
-    status.value = '正在分析共振峰...';
-    analysisResults.value = analyzeSyllables(audioBuffer.value, sequences.value);
-    
-    await nextTick();
-    drawFormantPlot();
-    
-    const totalSyllables = sequences.value.reduce((sum, seq) => sum + seq.syllables.length, 0);
-    status.value = `分析完成！检测到 ${sequences.value.length} 个序列，共 ${totalSyllables} 个音节`;
+    status.value = '示例音频加载完成！';
     statusType.value = 'success';
-    
-    audioContext.close();
   } catch (err) {
     status.value = `错误: ${err}`;
     statusType.value = 'error';
@@ -444,15 +436,376 @@ async function loadAndAnalyze() {
   }
 }
 
-/**
- * 两级检测：先按大间隔分割序列，再按小间隔分割音节
- */
+async function handleFileSelect(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  
+  isAnalyzing.value = true;
+  status.value = `正在加载 ${file.name}...`;
+  statusType.value = 'info';
+  
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    await addAudioTrack(arrayBuffer, file.name);
+    
+    status.value = `${file.name} 加载完成！`;
+    statusType.value = 'success';
+  } catch (err) {
+    status.value = `错误: ${err}`;
+    statusType.value = 'error';
+  } finally {
+    isAnalyzing.value = false;
+    input.value = '';
+  }
+}
+
+// ==================== 录制功能 ====================
+async function toggleRecording() {
+  if (isRecording.value) {
+    stopRecording();
+  } else {
+    await startRecording();
+  }
+}
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    recordedChunks = [];
+    
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        recordedChunks.push(e.data);
+      }
+    };
+    
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(track => track.stop());
+      
+      if (recordedChunks.length > 0) {
+        const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+        const arrayBuffer = await blob.arrayBuffer();
+        
+        isAnalyzing.value = true;
+        status.value = '正在分析录制的音频...';
+        
+        try {
+          const timestamp = new Date().toLocaleTimeString();
+          await addAudioTrack(arrayBuffer, `录制 ${timestamp}`);
+          status.value = '录制音频分析完成！';
+          statusType.value = 'success';
+        } catch (err) {
+          status.value = `分析错误: ${err}`;
+          statusType.value = 'error';
+        } finally {
+          isAnalyzing.value = false;
+        }
+      }
+    };
+    
+    mediaRecorder.start();
+    isRecording.value = true;
+    recordingStartTime = Date.now();
+    recordingDuration.value = 0;
+    
+    recordingInterval = setInterval(() => {
+      recordingDuration.value = (Date.now() - recordingStartTime) / 1000;
+    }, 100);
+    
+  } catch (err) {
+    status.value = `录制错误: ${err}`;
+    statusType.value = 'error';
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  isRecording.value = false;
+  
+  if (recordingInterval) {
+    clearInterval(recordingInterval);
+    recordingInterval = null;
+  }
+}
+
+// ==================== 音轨管理 ====================
+async function addAudioTrack(arrayBuffer: ArrayBuffer, name: string) {
+  const audioContext = new AudioContext({ sampleRate: 44100 });
+  const buffer = await audioContext.decodeAudioData(arrayBuffer);
+  audioContext.close();
+  
+  const track: AudioTrack = {
+    id: `track-${Date.now()}`,
+    name,
+    buffer,
+    sequences: [],
+    results: [],
+    stats: null,
+    splitMarks: [],
+    expanded: true
+  };
+  
+  audioTracks.value.push(track);
+  const trackIdx = audioTracks.value.length - 1;
+  
+  await nextTick();
+  analyzeTrack(trackIdx);
+}
+
+function analyzeTrack(trackIdx: number) {
+  const track = audioTracks.value[trackIdx];
+  if (!track) return;
+  
+  // 检测序列和音节
+  track.sequences = detectSequencesAndSyllables(track.buffer);
+  
+  // 生成分析结果
+  track.results = [];
+  for (let seqIdx = 0; seqIdx < track.sequences.length; seqIdx++) {
+    const seq = track.sequences[seqIdx];
+    for (let sylIdx = 0; sylIdx < seq.syllables.length; sylIdx++) {
+      const syl = seq.syllables[sylIdx];
+      track.results.push({
+        ...syl,
+        trackId: track.id,
+        trackName: track.name,
+        seqIdx,
+        sylIdx,
+        time: syl.start,
+        duration: (syl.end - syl.start) * 1000
+      });
+    }
+  }
+  
+  // 计算统计
+  track.stats = calculateStats(track.results);
+  
+  // 绘制图表
+  nextTick(() => {
+    drawTrackWaveform(trackIdx);
+    drawTrackFormantPlot(trackIdx);
+  });
+}
+
+function reanalyzeTrack(trackIdx: number) {
+  analyzeTrack(trackIdx);
+  status.value = '重新分析完成！';
+  statusType.value = 'success';
+}
+
+function removeTrack(trackIdx: number) {
+  audioTracks.value.splice(trackIdx, 1);
+}
+
+function clearAllAudios() {
+  audioTracks.value = [];
+  status.value = '';
+}
+
+function toggleTrackExpanded(trackIdx: number) {
+  const track = audioTracks.value[trackIdx];
+  if (track) {
+    track.expanded = !track.expanded;
+    if (track.expanded) {
+      nextTick(() => {
+        drawTrackWaveform(trackIdx);
+        drawTrackFormantPlot(trackIdx);
+      });
+    }
+  }
+}
+
+function calculateStats(results: AnalysisResult[]): Record<string, VowelStat> | null {
+  if (!results.length) return null;
+  
+  const stats: Record<string, VowelStat> = {};
+  
+  for (const result of results) {
+    const vowel = result.guessedVowel;
+    if (!vowel) continue;
+    
+    if (!stats[vowel]) {
+      stats[vowel] = {
+        count: 0,
+        f1Min: Infinity,
+        f1Max: -Infinity,
+        f1Avg: 0,
+        f2Min: Infinity,
+        f2Max: -Infinity,
+        f2Avg: 0
+      };
+    }
+    
+    const s = stats[vowel];
+    s.count++;
+    s.f1Min = Math.min(s.f1Min, result.f1);
+    s.f1Max = Math.max(s.f1Max, result.f1);
+    s.f2Min = Math.min(s.f2Min, result.f2);
+    s.f2Max = Math.max(s.f2Max, result.f2);
+    s.f1Avg += result.f1;
+    s.f2Avg += result.f2;
+  }
+  
+  for (const vowel in stats) {
+    stats[vowel].f1Avg /= stats[vowel].count;
+    stats[vowel].f2Avg /= stats[vowel].count;
+  }
+  
+  return stats;
+}
+
+// ==================== 分割标记 ====================
+function handleWaveformMouseMove(event: MouseEvent, trackIdx: number) {
+  const canvas = getCanvasRef(trackIdx, 'waveform');
+  const track = audioTracks.value[trackIdx];
+  if (!canvas || !track) return;
+  
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const ratio = x / rect.width;
+  const timeMs = ratio * track.buffer.duration * 1000;
+  
+  cursorInfo.value = {
+    visible: true,
+    x,
+    timeMs,
+    trackIdx
+  };
+}
+
+function handleWaveformMouseLeave() {
+  cursorInfo.value.visible = false;
+}
+
+function handleWaveformClick(event: MouseEvent, trackIdx: number) {
+  const canvas = getCanvasRef(trackIdx, 'waveform');
+  const track = audioTracks.value[trackIdx];
+  if (!canvas || !track) return;
+  
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const ratio = x / rect.width;
+  const timeMs = ratio * track.buffer.duration * 1000;
+  const xPercent = ratio * 100;
+  
+  track.splitMarks.push({ timeMs, xPercent });
+  track.splitMarks.sort((a, b) => a.timeMs - b.timeMs);
+}
+
+function removeSplitMark(trackIdx: number, markIdx: number) {
+  const track = audioTracks.value[trackIdx];
+  if (track) {
+    track.splitMarks.splice(markIdx, 1);
+  }
+}
+
+function clearSplitMarks(trackIdx: number) {
+  const track = audioTracks.value[trackIdx];
+  if (track) {
+    track.splitMarks = [];
+  }
+}
+
+async function exportSplitAudio(trackIdx: number) {
+  const track = audioTracks.value[trackIdx];
+  if (!track || track.splitMarks.length === 0) return;
+  
+  const buffer = track.buffer;
+  const sampleRate = buffer.sampleRate;
+  const channelData = buffer.getChannelData(0);
+  
+  // 构建分割点列表（包含开头和结尾）
+  const splitPoints = [0, ...track.splitMarks.map(m => m.timeMs / 1000), buffer.duration];
+  
+  for (let i = 0; i < splitPoints.length - 1; i++) {
+    const startTime = splitPoints[i];
+    const endTime = splitPoints[i + 1];
+    const startSample = Math.floor(startTime * sampleRate);
+    const endSample = Math.floor(endTime * sampleRate);
+    const length = endSample - startSample;
+    
+    if (length <= 0) continue;
+    
+    // 创建新的音频缓冲区
+    const audioContext = new AudioContext({ sampleRate });
+    const newBuffer = audioContext.createBuffer(1, length, sampleRate);
+    const newChannelData = newBuffer.getChannelData(0);
+    
+    for (let j = 0; j < length; j++) {
+      newChannelData[j] = channelData[startSample + j] || 0;
+    }
+    
+    // 导出为 WAV
+    const wavBlob = audioBufferToWav(newBuffer);
+    const url = URL.createObjectURL(wavBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${track.name.replace(/\.[^.]+$/, '')}_part${i + 1}.wav`;
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    audioContext.close();
+  }
+  
+  status.value = `已导出 ${splitPoints.length - 1} 个音频片段`;
+  statusType.value = 'success';
+}
+
+function audioBufferToWav(buffer: AudioBuffer): Blob {
+  const numChannels = 1;
+  const sampleRate = buffer.sampleRate;
+  const format = 1; // PCM
+  const bitDepth = 16;
+  
+  const data = buffer.getChannelData(0);
+  const dataLength = data.length * (bitDepth / 8);
+  const bufferLength = 44 + dataLength;
+  
+  const arrayBuffer = new ArrayBuffer(bufferLength);
+  const view = new DataView(arrayBuffer);
+  
+  // WAV header
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, format, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numChannels * (bitDepth / 8), true);
+  view.setUint16(32, numChannels * (bitDepth / 8), true);
+  view.setUint16(34, bitDepth, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataLength, true);
+  
+  // Write audio data
+  let offset = 44;
+  for (let i = 0; i < data.length; i++) {
+    const sample = Math.max(-1, Math.min(1, data[i]));
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+    offset += 2;
+  }
+  
+  return new Blob([arrayBuffer], { type: 'audio/wav' });
+}
+
+function writeString(view: DataView, offset: number, str: string) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
+  }
+}
+
+// ==================== 音频分析核心 ====================
 function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
   const data = buffer.getChannelData(0);
   const sampleRate = buffer.sampleRate;
   
-  // 计算短时能量
-  const frameSize = Math.floor(sampleRate * 0.01); // 10ms 帧（更精细）
+  const frameSize = Math.floor(sampleRate * 0.01);
   const hopSize = Math.floor(frameSize / 2);
   const energies: { time: number; energy: number }[] = [];
   
@@ -467,12 +820,10 @@ function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
     });
   }
   
-  // 动态阈值
   const sortedEnergies = energies.map(e => e.energy).sort((a, b) => a - b);
   const noiseFloor = sortedEnergies[Math.floor(sortedEnergies.length * 0.3)];
   const threshold = noiseFloor * params.energyThresholdMultiplier;
   
-  // 第一步：检测所有发声段
   const voiceSegments: { start: number; end: number }[] = [];
   let inVoice = false;
   let voiceStart = 0;
@@ -488,7 +839,6 @@ function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
       inVoice = false;
     }
   }
-  // 处理末尾
   if (inVoice) {
     const lastTime = energies[energies.length - 1].time;
     if (lastTime - voiceStart >= params.minSyllableDurationMs / 1000) {
@@ -496,7 +846,6 @@ function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
     }
   }
   
-  // 第二步：合并相近的段（小于音节间隔阈值的合并为同一音节）
   const syllables: { start: number; end: number }[] = [];
   for (const seg of voiceSegments) {
     if (syllables.length === 0) {
@@ -505,7 +854,6 @@ function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
       const last = syllables[syllables.length - 1];
       const gap = seg.start - last.end;
       if (gap < params.syllableGapMs / 1000) {
-        // 合并
         last.end = seg.end;
       } else {
         syllables.push({ ...seg });
@@ -513,7 +861,6 @@ function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
     }
   }
   
-  // 第三步：按序列间隔阈值分组
   const sequenceGroups: { start: number; end: number }[][] = [];
   let currentGroup: { start: number; end: number }[] = [];
   
@@ -524,7 +871,6 @@ function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
       const lastSyl = currentGroup[currentGroup.length - 1];
       const gap = syl.start - lastSyl.end;
       if (gap >= params.sequenceGapMs / 1000) {
-        // 新序列
         sequenceGroups.push(currentGroup);
         currentGroup = [syl];
       } else {
@@ -536,7 +882,6 @@ function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
     sequenceGroups.push(currentGroup);
   }
   
-  // 第四步：为每个序列分析音节特征
   const result: Sequence[] = [];
   
   for (const group of sequenceGroups) {
@@ -544,35 +889,18 @@ function detectSequencesAndSyllables(buffer: AudioBuffer): Sequence[] {
     const seqEnd = group[group.length - 1].end;
     
     const analyzedSyllables: Syllable[] = group.map(syl => {
-      // 分析这个音节的共振峰
       const { f1, f2, volume } = analyzeFormants(buffer, syl.start, syl.end);
       const guessedVowel = guessVowel(f1, f2);
-      const currentMatch = matchCurrentConfig(f1, f2);
       
-      return {
-        start: syl.start,
-        end: syl.end,
-        f1,
-        f2,
-        volume,
-        guessedVowel,
-        currentMatch
-      };
+      return { start: syl.start, end: syl.end, f1, f2, volume, guessedVowel };
     });
     
-    result.push({
-      start: seqStart,
-      end: seqEnd,
-      syllables: analyzedSyllables
-    });
+    result.push({ start: seqStart, end: seqEnd, syllables: analyzedSyllables });
   }
   
   return result;
 }
 
-/**
- * 分析指定时间范围内的共振峰
- */
 function analyzeFormants(buffer: AudioBuffer, start: number, end: number): { f1: number; f2: number; volume: number } {
   const sampleRate = buffer.sampleRate;
   const data = buffer.getChannelData(0);
@@ -581,7 +909,6 @@ function analyzeFormants(buffer: AudioBuffer, start: number, end: number): { f1:
   const endSample = Math.floor(end * sampleRate);
   const duration = endSample - startSample;
   
-  // 取中间部分做分析（避免边缘效应）
   const margin = Math.floor(duration * 0.1);
   const analysisStart = startSample + margin;
   const frameSize = Math.min(2048, duration - 2 * margin);
@@ -590,18 +917,15 @@ function analyzeFormants(buffer: AudioBuffer, start: number, end: number): { f1:
     return { f1: 0, f2: 0, volume: -100 };
   }
   
-  // 提取帧数据
   const frame = new Float32Array(2048);
   for (let i = 0; i < Math.min(2048, frameSize); i++) {
     frame[i] = data[analysisStart + i] || 0;
   }
   
-  // 应用汉宁窗
   for (let i = 0; i < 2048; i++) {
     frame[i] *= 0.5 * (1 - Math.cos(2 * Math.PI * i / 2047));
   }
   
-  // 计算音量
   let rms = 0;
   for (let i = 0; i < frameSize; i++) {
     rms += data[analysisStart + i] * data[analysisStart + i];
@@ -609,36 +933,10 @@ function analyzeFormants(buffer: AudioBuffer, start: number, end: number): { f1:
   rms = Math.sqrt(rms / frameSize);
   const volume = rms > 0 ? 20 * Math.log10(rms) : -100;
   
-  // FFT
   const spectrum = performFFT(frame);
-  
-  // 提取共振峰
   const formants = extractFormants(spectrum, sampleRate, 2048);
   
   return { f1: formants.f1, f2: formants.f2, volume };
-}
-
-/**
- * 将序列数据转换为分析结果列表
- */
-function analyzeSyllables(_buffer: AudioBuffer, seqs: Sequence[]): AnalysisResult[] {
-  const results: AnalysisResult[] = [];
-  
-  for (let seqIdx = 0; seqIdx < seqs.length; seqIdx++) {
-    const seq = seqs[seqIdx];
-    for (let sylIdx = 0; sylIdx < seq.syllables.length; sylIdx++) {
-      const syl = seq.syllables[sylIdx];
-      results.push({
-        ...syl,
-        seqIdx,
-        sylIdx,
-        time: syl.start,
-        duration: (syl.end - syl.start) * 1000
-      });
-    }
-  }
-  
-  return results;
 }
 
 function performFFT(frame: Float32Array): Float32Array {
@@ -646,16 +944,13 @@ function performFFT(frame: Float32Array): Float32Array {
   const real = new Float32Array(n);
   const imag = new Float32Array(n);
   
-  // 复制输入
   for (let i = 0; i < n; i++) {
     real[i] = frame[i];
     imag[i] = 0;
   }
   
-  // Cooley-Tukey FFT
   const levels = Math.log2(n);
   
-  // 位反转排序
   for (let i = 0; i < n; i++) {
     let j = 0;
     let x = i;
@@ -669,7 +964,6 @@ function performFFT(frame: Float32Array): Float32Array {
     }
   }
   
-  // FFT 蝶形运算
   for (let size = 2; size <= n; size *= 2) {
     const halfSize = size / 2;
     const angleStep = -2 * Math.PI / size;
@@ -694,7 +988,6 @@ function performFFT(frame: Float32Array): Float32Array {
     }
   }
   
-  // 计算幅度谱 (dB)
   const magnitude = new Float32Array(n / 2);
   for (let i = 0; i < n / 2; i++) {
     const mag = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]) / n;
@@ -708,15 +1001,11 @@ function extractFormants(spectrum: Float32Array, sampleRate: number, fftSize: nu
   const binToFreq = (bin: number) => bin * sampleRate / fftSize;
   const freqToBin = (freq: number) => Math.round(freq * fftSize / sampleRate);
   
-  // F1 搜索范围: 200-1000 Hz
   const f1MinBin = freqToBin(200);
   const f1MaxBin = freqToBin(1000);
-  
-  // F2 搜索范围: 800-3000 Hz
   const f2MinBin = freqToBin(800);
   const f2MaxBin = freqToBin(3000);
   
-  // 找 F1 峰值
   let f1Bin = f1MinBin;
   let f1Max = -Infinity;
   for (let i = f1MinBin; i <= f1MaxBin && i < spectrum.length; i++) {
@@ -726,10 +1015,9 @@ function extractFormants(spectrum: Float32Array, sampleRate: number, fftSize: nu
     }
   }
   
-  // 找 F2 峰值（排除 F1 附近）
   let f2Bin = f2MinBin;
   let f2Max = -Infinity;
-  const f1ProtectedBins = freqToBin(300); // F1 周围 300Hz 保护区
+  const f1ProtectedBins = freqToBin(300);
   
   for (let i = f2MinBin; i <= f2MaxBin && i < spectrum.length; i++) {
     if (Math.abs(i - f1Bin) < f1ProtectedBins) continue;
@@ -739,97 +1027,54 @@ function extractFormants(spectrum: Float32Array, sampleRate: number, fftSize: nu
     }
   }
   
-  return {
-    f1: binToFreq(f1Bin),
-    f2: binToFreq(f2Bin)
-  };
+  return { f1: binToFreq(f1Bin), f2: binToFreq(f2Bin) };
 }
 
 function guessVowel(f1: number, f2: number): string | null {
-  // 基于标准元音图的粗略分类
-  // 这个分类基于元音四边形的典型位置
-  
-  // U: 低 F1, 低 F2 (后高元音)
-  if (f1 < 450 && f2 < 1200) return 'U';
-  
-  // I: 低 F1, 高 F2 (前高元音)
-  if (f1 < 450 && f2 > 1800) return 'I';
-  
-  // A: 高 F1, 中 F2 (低元音)
-  if (f1 > 600 && f2 > 1000 && f2 < 2000) return 'A';
-  
-  // O: 中 F1, 低 F2 (后中元音)
-  if (f1 >= 400 && f1 <= 700 && f2 < 1200) return 'O';
-  
-  // E: 中 F1, 高 F2 (前中元音)
-  if (f1 >= 400 && f1 <= 700 && f2 > 1600) return 'E';
-  
-  return null;
-}
-
-function matchCurrentConfig(f1: number, f2: number): string | null {
   for (const [vowel, range] of Object.entries(DEFAULT_VOWEL_FORMANTS)) {
     if (f1 >= range.f1[0] && f1 <= range.f1[1] &&
         f2 >= range.f2[0] && f2 <= range.f2[1]) {
       return vowel;
     }
   }
-  return null;
-}
-
-// ==================== 波形光标处理 ====================
-function handleWaveformMouseMove(event: MouseEvent) {
-  const canvas = waveformCanvas.value;
-  const buffer = audioBuffer.value;
-  if (!canvas || !buffer) return;
   
-  const rect = canvas.getBoundingClientRect();
-  const x = event.clientX - rect.left;
-  const ratio = x / canvas.width;
-  const timeMs = ratio * buffer.duration * 1000;
+  let bestVowel: string | null = null;
+  let bestDistance = Infinity;
   
-  cursorInfo.value = {
-    visible: true,
-    x: x,
-    timeMs: timeMs
-  };
-}
-
-function handleWaveformMouseLeave() {
-  cursorInfo.value.visible = false;
-}
-
-function handleWaveformClick(event: MouseEvent) {
-  const canvas = waveformCanvas.value;
-  const buffer = audioBuffer.value;
-  if (!canvas || !buffer) return;
+  for (const [vowel, range] of Object.entries(DEFAULT_VOWEL_FORMANTS)) {
+    const centerF1 = (range.f1[0] + range.f1[1]) / 2;
+    const centerF2 = (range.f2[0] + range.f2[1]) / 2;
+    const rangeF1 = range.f1[1] - range.f1[0];
+    const rangeF2 = range.f2[1] - range.f2[0];
+    
+    const distF1 = (f1 - centerF1) / rangeF1;
+    const distF2 = (f2 - centerF2) / rangeF2;
+    const distance = Math.sqrt(distF1 * distF1 + distF2 * distF2);
+    
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestVowel = vowel;
+    }
+  }
   
-  const rect = canvas.getBoundingClientRect();
-  const x = event.clientX - rect.left;
-  const ratio = x / canvas.width;
-  const timeMs = ratio * buffer.duration * 1000;
-  
-  // 添加标记点
-  clickMarks.value.push({ x, timeMs });
+  if (bestDistance > 1.5) return null;
+  return bestVowel;
 }
 
-function clearClickMarks() {
-  clickMarks.value = [];
-}
-
-function drawWaveform() {
-  const canvas = waveformCanvas.value;
-  const buffer = audioBuffer.value;
-  if (!canvas || !buffer) return;
+// ==================== 绘图 ====================
+function drawTrackWaveform(trackIdx: number) {
+  const canvas = getCanvasRef(trackIdx, 'waveform');
+  const track = audioTracks.value[trackIdx];
+  if (!canvas || !track) return;
   
   const ctx = canvas.getContext('2d')!;
   const { width, height } = canvas;
+  const buffer = track.buffer;
   const data = buffer.getChannelData(0);
   
   ctx.fillStyle = '#1a1a2e';
   ctx.fillRect(0, 0, width, height);
   
-  // 绘制波形
   ctx.strokeStyle = '#48dbfb';
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -856,14 +1101,12 @@ function drawWaveform() {
   ctx.stroke();
   
   // 绘制序列和音节标记
-  for (const seq of sequences.value) {
-    // 序列背景
+  for (const seq of track.sequences) {
     const seqX1 = (seq.start / buffer.duration) * width;
     const seqX2 = (seq.end / buffer.duration) * width;
     ctx.fillStyle = 'rgba(254, 202, 87, 0.15)';
     ctx.fillRect(seqX1, 0, seqX2 - seqX1, height);
     
-    // 音节标记
     for (const syl of seq.syllables) {
       const x1 = (syl.start / buffer.duration) * width;
       const x2 = (syl.end / buffer.duration) * width;
@@ -873,27 +1116,24 @@ function drawWaveform() {
   }
 }
 
-function drawFormantPlot() {
-  const canvas = formantPlotCanvas.value;
-  if (!canvas || !analysisResults.value.length) return;
+function drawTrackFormantPlot(trackIdx: number) {
+  const canvas = getCanvasRef(trackIdx, 'formant');
+  const track = audioTracks.value[trackIdx];
+  if (!canvas || !track || !track.results.length) return;
   
   const ctx = canvas.getContext('2d')!;
   const { width, height } = canvas;
-  const padding = 50;
+  const padding = 40;
   
-  // 坐标轴范围
-  const f1Min = 100, f1Max = 1100;  // Y 轴 (F1)
-  const f2Min = 500, f2Max = 3500;  // X 轴 (F2)
+  const f1Min = 100, f1Max = 1100;
+  const f2Min = 500, f2Max = 3500;
   
-  // 清除画布
   ctx.fillStyle = '#1a1a2e';
   ctx.fillRect(0, 0, width, height);
   
-  // 坐标转换
   const toX = (f2: number) => padding + (f2 - f2Min) / (f2Max - f2Min) * (width - 2 * padding);
   const toY = (f1: number) => padding + (f1 - f1Min) / (f1Max - f1Min) * (height - 2 * padding);
   
-  // 绘制网格
   ctx.strokeStyle = '#333';
   ctx.lineWidth = 1;
   for (let f1 = 200; f1 <= 1000; f1 += 200) {
@@ -902,9 +1142,6 @@ function drawFormantPlot() {
     ctx.moveTo(padding, y);
     ctx.lineTo(width - padding, y);
     ctx.stroke();
-    ctx.fillStyle = '#888';
-    ctx.font = '10px monospace';
-    ctx.fillText(`${f1}`, 5, y + 3);
   }
   for (let f2 = 1000; f2 <= 3000; f2 += 500) {
     const x = toX(f2);
@@ -912,12 +1149,8 @@ function drawFormantPlot() {
     ctx.moveTo(x, padding);
     ctx.lineTo(x, height - padding);
     ctx.stroke();
-    ctx.fillStyle = '#888';
-    ctx.fillText(`${f2}`, x - 15, height - 10);
   }
   
-  // 绘制当前配置的范围框
-  ctx.lineWidth = 2;
   const colors: Record<string, string> = {
     U: '#9b59b6',
     I: '#48dbfb',
@@ -926,6 +1159,7 @@ function drawFormantPlot() {
     O: '#ff6b6b'
   };
   
+  ctx.lineWidth = 2;
   for (const [vowel, range] of Object.entries(DEFAULT_VOWEL_FORMANTS)) {
     ctx.strokeStyle = colors[vowel] || '#888';
     ctx.setLineDash([5, 5]);
@@ -937,39 +1171,34 @@ function drawFormantPlot() {
   }
   ctx.setLineDash([]);
   
-  // 绘制数据点
-  for (const result of analysisResults.value) {
+  for (const result of track.results) {
     const x = toX(result.f2);
     const y = toY(result.f1);
     
     ctx.beginPath();
-    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
     ctx.fillStyle = colors[result.guessedVowel || ''] || '#888';
     ctx.fill();
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 1;
     ctx.stroke();
   }
-  
-  // 坐标轴标签
-  ctx.fillStyle = '#fff';
-  ctx.font = '12px sans-serif';
-  ctx.fillText('F2 (Hz) →', width / 2 - 30, height - 25);
-  ctx.save();
-  ctx.translate(15, height / 2);
-  ctx.rotate(-Math.PI / 2);
-  ctx.fillText('F1 (Hz) →', -30, 0);
-  ctx.restore();
 }
 
-function exportResults() {
+// ==================== 导出 ====================
+function exportAllResults() {
   const data = {
-    audioFile: 'oiia-oiia-sound.mp3',
-    duration: audioBuffer.value?.duration,
+    exportTime: new Date().toISOString(),
     params: { ...params },
-    sequences: sequences.value,
-    results: analysisResults.value,
-    stats: vowelStats.value,
+    tracks: audioTracks.value.map(t => ({
+      name: t.name,
+      duration: t.buffer.duration,
+      sequences: t.sequences,
+      results: t.results,
+      stats: t.stats
+    })),
+    allResults: allAnalysisResults.value,
+    allStats: allVowelStats.value,
     suggestedConfig: suggestedConfig.value
   };
   
@@ -977,7 +1206,7 @@ function exportResults() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'vowel-analysis-results.json';
+  a.download = `vowel-analysis-${Date.now()}.json`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -989,6 +1218,16 @@ function copyConfig() {
     statusType.value = 'success';
   }
 }
+
+// ==================== 清理 ====================
+onUnmounted(() => {
+  if (recordingInterval) {
+    clearInterval(recordingInterval);
+  }
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+});
 </script>
 
 <style scoped>
@@ -1019,11 +1258,19 @@ function copyConfig() {
   margin-top: 8px;
 }
 
+/* 控制面板 */
 .control-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.control-row {
   display: flex;
   gap: 12px;
   justify-content: center;
-  margin-bottom: 24px;
+  flex-wrap: wrap;
 }
 
 .btn {
@@ -1045,17 +1292,60 @@ function copyConfig() {
   color: white;
 }
 
-.btn-primary:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-}
-
 .btn-secondary {
   background: rgba(255, 255, 255, 0.1);
   color: white;
   border: 1px solid #444;
 }
 
+.btn-success {
+  background: linear-gradient(135deg, #2ecc71, #27ae60);
+  color: white;
+}
+
+.btn-danger {
+  background: linear-gradient(135deg, #e74c3c, #c0392b);
+  color: white;
+}
+
+.btn-small {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+}
+
+.file-input-label {
+  display: inline-block;
+}
+
+/* 录制指示器 */
+.recording-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(231, 76, 60, 0.2);
+  border: 1px solid #e74c3c;
+  border-radius: 8px;
+  margin-bottom: 24px;
+  color: #e74c3c;
+  font-weight: bold;
+}
+
+.recording-dot {
+  width: 12px;
+  height: 12px;
+  background: #e74c3c;
+  border-radius: 50%;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* 状态 */
 .status-banner {
   padding: 12px 20px;
   border-radius: 8px;
@@ -1078,28 +1368,118 @@ function copyConfig() {
   border: 1px solid #e94560;
 }
 
-section {
-  background: rgba(255, 255, 255, 0.05);
+/* 参数 */
+.params-section {
+  background: rgba(255, 255, 255, 0.03);
   border-radius: 12px;
-  padding: 20px;
+  padding: 16px;
   margin-bottom: 24px;
 }
 
-section h2 {
-  margin: 0 0 16px 0;
-  font-size: 1.2rem;
-  color: #feca57;
+.params-section h3 {
+  margin: 0 0 12px 0;
+  color: #888;
+  font-size: 0.9rem;
 }
 
-.waveform-section canvas {
-  width: 100%;
-  height: 150px;
-  border-radius: 8px;
+.params-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.params-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: #aaa;
+}
+
+.params-grid input {
+  width: 120px;
+  padding: 8px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+}
+
+/* 音频轨道 */
+.audio-tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.audio-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.track-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+}
+
+.track-header:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.track-icon {
+  color: #feca57;
+  font-size: 0.8rem;
+}
+
+.track-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #feca57;
+  flex: 1;
+}
+
+.track-info {
+  color: #888;
+  font-size: 0.85rem;
+}
+
+.track-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.track-content {
+  padding: 16px;
+}
+
+/* 波形 */
+.waveform-section {
+  margin-bottom: 20px;
+}
+
+.waveform-section h3,
+.sequences-section h3,
+.formant-plot-section h3,
+.stats-section h3 {
+  margin: 0 0 12px 0;
+  font-size: 1rem;
+  color: #48dbfb;
 }
 
 .waveform-container {
   position: relative;
   cursor: crosshair;
+}
+
+.waveform-container canvas {
+  width: 100%;
+  height: 150px;
+  border-radius: 8px;
 }
 
 .cursor-line {
@@ -1126,7 +1506,7 @@ section h2 {
   white-space: nowrap;
 }
 
-.click-mark {
+.split-mark {
   position: absolute;
   top: 0;
   width: 2px;
@@ -1136,9 +1516,9 @@ section h2 {
   z-index: 9;
 }
 
-.click-mark .mark-time {
+.split-mark .mark-time {
   position: absolute;
-  bottom: -24px;
+  bottom: -20px;
   left: 50%;
   transform: translateX(-50%);
   background: #00d2d3;
@@ -1150,10 +1530,34 @@ section h2 {
   white-space: nowrap;
 }
 
-.cursor-controls {
+.split-mark .mark-remove {
+  position: absolute;
+  top: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #e74c3c;
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.time-markers {
   display: flex;
   justify-content: space-between;
+  color: #888;
+  font-size: 0.8rem;
+  margin-top: 8px;
+}
+
+.waveform-controls {
+  display: flex;
   align-items: center;
+  gap: 12px;
   margin-top: 8px;
   padding: 8px 12px;
   background: rgba(0, 0, 0, 0.2);
@@ -1165,48 +1569,108 @@ section h2 {
   font-size: 0.85rem;
 }
 
-.btn-small {
-  padding: 4px 12px;
-  font-size: 0.8rem;
-}
-
-.time-markers {
+/* 序列 */
+.sequences-container {
   display: flex;
-  justify-content: space-between;
-  color: #888;
-  font-size: 0.8rem;
-  margin-top: 8px;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.segments-timeline {
-  position: relative;
-  height: 40px;
-  background: rgba(0, 0, 0, 0.3);
+.sequence-card {
+  background: rgba(0, 0, 0, 0.2);
   border-radius: 8px;
+  padding: 12px;
 }
 
-.segment-marker {
+.sequence-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+}
+
+.sequence-label {
+  color: #feca57;
+  font-weight: bold;
+}
+
+.sequence-time {
+  color: #888;
+}
+
+.syllable-count {
+  background: rgba(72, 219, 251, 0.2);
+  color: #48dbfb;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.syllables-timeline {
+  position: relative;
+  height: 32px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.syllable-marker {
   position: absolute;
   height: 100%;
-  background: rgba(254, 202, 87, 0.5);
   border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   font-size: 0.8rem;
-  transition: all 0.2s;
+  font-weight: bold;
+  min-width: 20px;
 }
 
-.segment-marker:hover,
-.segment-marker.active {
-  background: rgba(254, 202, 87, 0.8);
+.syllable-marker.u { background: rgba(155, 89, 182, 0.7); color: #fff; }
+.syllable-marker.i { background: rgba(72, 219, 251, 0.7); color: #000; }
+.syllable-marker.e { background: rgba(46, 204, 113, 0.7); color: #000; }
+.syllable-marker.a { background: rgba(254, 202, 87, 0.7); color: #000; }
+.syllable-marker.o { background: rgba(255, 107, 107, 0.7); color: #fff; }
+.syllable-marker.unknown { background: rgba(136, 136, 136, 0.7); color: #fff; }
+
+.sequence-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
 }
 
+.sequence-result .label {
+  color: #888;
+}
+
+.vowel-sequence {
+  display: flex;
+  gap: 2px;
+}
+
+.vowel-char {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: bold;
+}
+
+.vowel-char.u { background: rgba(155, 89, 182, 0.3); color: #9b59b6; }
+.vowel-char.i { background: rgba(72, 219, 251, 0.3); color: #48dbfb; }
+.vowel-char.e { background: rgba(46, 204, 113, 0.3); color: #2ecc71; }
+.vowel-char.a { background: rgba(254, 202, 87, 0.3); color: #feca57; }
+.vowel-char.o { background: rgba(255, 107, 107, 0.3); color: #ff6b6b; }
+.vowel-char.unknown { background: rgba(136, 136, 136, 0.3); color: #888; }
+
+/* 共振峰图 */
 .plot-container {
   display: flex;
-  gap: 20px;
+  gap: 16px;
   align-items: flex-start;
+}
+
+.plot-container canvas {
+  border-radius: 8px;
 }
 
 .plot-legend {
@@ -1219,6 +1683,7 @@ section h2 {
   display: flex;
   align-items: center;
   gap: 8px;
+  font-size: 0.85rem;
 }
 
 .dot {
@@ -1234,14 +1699,61 @@ section h2 {
 .dot.o { background: #ff6b6b; }
 .dot.unknown { background: #888; }
 
+/* 统计 */
+.stats-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.stat-card {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  min-width: 150px;
+}
+
+.stat-card h4 {
+  margin: 0 0 8px 0;
+  font-size: 1.2rem;
+}
+
+.stat-card h4.u { color: #9b59b6; }
+.stat-card h4.i { color: #48dbfb; }
+.stat-card h4.e { color: #2ecc71; }
+.stat-card h4.a { color: #feca57; }
+.stat-card h4.o { color: #ff6b6b; }
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 0.85rem;
+  border-bottom: 1px solid #333;
+}
+
+/* 结果表格 */
+.results-section {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 24px;
+}
+
+.results-section h2 {
+  margin: 0 0 16px 0;
+  color: #feca57;
+}
+
 .results-table {
   width: 100%;
   border-collapse: collapse;
+  font-size: 0.85rem;
 }
 
 .results-table th,
 .results-table td {
-  padding: 10px;
+  padding: 8px;
   text-align: center;
   border-bottom: 1px solid #333;
 }
@@ -1255,10 +1767,6 @@ section h2 {
   background: rgba(255, 255, 255, 0.05);
 }
 
-.results-table tr.highlight {
-  background: rgba(254, 202, 87, 0.2);
-}
-
 .vowel-cell {
   font-weight: bold;
 }
@@ -1269,37 +1777,17 @@ section h2 {
 .vowel-cell.a { color: #feca57; }
 .vowel-cell.o { color: #ff6b6b; }
 
-.match-cell.match { color: #2ecc71; }
-.match-cell.no-match { color: #e94560; }
-
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
+/* 建议配置 */
+.suggestion-section {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 24px;
 }
 
-.stat-card {
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 8px;
-  padding: 16px;
-}
-
-.stat-card h3 {
-  margin: 0 0 12px 0;
-  font-size: 1.5rem;
-}
-
-.stat-card h3.u { color: #9b59b6; }
-.stat-card h3.i { color: #48dbfb; }
-.stat-card h3.e { color: #2ecc71; }
-.stat-card h3.a { color: #feca57; }
-.stat-card h3.o { color: #ff6b6b; }
-
-.stat-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 4px 0;
-  border-bottom: 1px solid #333;
+.suggestion-section h2 {
+  margin: 0 0 16px 0;
+  color: #feca57;
 }
 
 .config-code {
@@ -1308,196 +1796,7 @@ section h2 {
   border-radius: 8px;
   overflow-x: auto;
   font-family: 'Fira Code', monospace;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   margin-bottom: 16px;
-}
-
-/* 分析参数 */
-.params-section {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.params-section h3 {
-  margin: 0 0 12px 0;
-  color: #888;
-}
-
-.params-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-
-.params-grid label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 0.85rem;
-  color: #aaa;
-}
-
-.params-grid input {
-  width: 120px;
-  padding: 8px;
-  border: 1px solid #444;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.3);
-  color: #fff;
-}
-
-/* 序列卡片 */
-.sequences-container {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.sequence-card {
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 8px;
-  padding: 16px;
-}
-
-.sequence-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 12px;
-}
-
-.sequence-header h3 {
-  margin: 0;
-  color: #feca57;
-}
-
-.sequence-time {
-  color: #888;
-  font-size: 0.85rem;
-}
-
-.syllable-count {
-  background: rgba(72, 219, 251, 0.2);
-  color: #48dbfb;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 0.8rem;
-}
-
-/* 音节时间线 */
-.syllables-timeline {
-  position: relative;
-  height: 36px;
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 6px;
-  margin-bottom: 12px;
-}
-
-.syllable-marker {
-  position: absolute;
-  height: 100%;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  font-size: 0.85rem;
-  font-weight: bold;
-  transition: all 0.2s;
-  min-width: 24px;
-}
-
-.syllable-marker.u { background: rgba(155, 89, 182, 0.6); color: #fff; }
-.syllable-marker.i { background: rgba(72, 219, 251, 0.6); color: #000; }
-.syllable-marker.e { background: rgba(46, 204, 113, 0.6); color: #000; }
-.syllable-marker.a { background: rgba(254, 202, 87, 0.6); color: #000; }
-.syllable-marker.o { background: rgba(255, 107, 107, 0.6); color: #fff; }
-.syllable-marker.unknown { background: rgba(136, 136, 136, 0.6); color: #fff; }
-
-.syllable-marker:hover,
-.syllable-marker.selected {
-  transform: scaleY(1.1);
-  z-index: 1;
-}
-
-.syllable-marker.u:hover, .syllable-marker.u.selected { background: rgba(155, 89, 182, 0.9); }
-.syllable-marker.i:hover, .syllable-marker.i.selected { background: rgba(72, 219, 251, 0.9); }
-.syllable-marker.e:hover, .syllable-marker.e.selected { background: rgba(46, 204, 113, 0.9); }
-.syllable-marker.a:hover, .syllable-marker.a.selected { background: rgba(254, 202, 87, 0.9); }
-.syllable-marker.o:hover, .syllable-marker.o.selected { background: rgba(255, 107, 107, 0.9); }
-
-/* 序列结果 */
-.sequence-result {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.sequence-result .label {
-  color: #888;
-}
-
-.vowel-sequence {
-  display: flex;
-  gap: 2px;
-}
-
-.vowel-char {
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-weight: bold;
-  font-size: 0.9rem;
-}
-
-.vowel-char.u { background: rgba(155, 89, 182, 0.3); color: #9b59b6; }
-.vowel-char.i { background: rgba(72, 219, 251, 0.3); color: #48dbfb; }
-.vowel-char.e { background: rgba(46, 204, 113, 0.3); color: #2ecc71; }
-.vowel-char.a { background: rgba(254, 202, 87, 0.3); color: #feca57; }
-.vowel-char.o { background: rgba(255, 107, 107, 0.3); color: #ff6b6b; }
-.vowel-char.unknown { background: rgba(136, 136, 136, 0.3); color: #888; }
-
-/* 音节详情 */
-.syllable-detail {
-  background: rgba(72, 219, 251, 0.1);
-  border: 1px solid #48dbfb;
-}
-
-.detail-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-}
-
-.detail-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.detail-item label {
-  color: #888;
-  font-size: 0.85rem;
-}
-
-.detail-item span {
-  font-size: 1.1rem;
-  font-weight: bold;
-}
-
-.vowel-badge {
-  display: inline-block;
-  padding: 4px 12px;
-  border-radius: 4px;
-  font-size: 1.2rem;
-}
-
-.vowel-badge.u { background: rgba(155, 89, 182, 0.3); color: #9b59b6; }
-.vowel-badge.i { background: rgba(72, 219, 251, 0.3); color: #48dbfb; }
-.vowel-badge.e { background: rgba(46, 204, 113, 0.3); color: #2ecc71; }
-.vowel-badge.a { background: rgba(254, 202, 87, 0.3); color: #feca57; }
-.vowel-badge.o { background: rgba(255, 107, 107, 0.3); color: #ff6b6b; }
-
-/* 可点击的表格行 */
-.results-table tbody tr {
-  cursor: pointer;
 }
 </style>

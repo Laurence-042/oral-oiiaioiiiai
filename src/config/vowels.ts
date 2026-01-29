@@ -26,14 +26,14 @@ export const SEQUENCE_PRESETS: Record<string, SequencePreset> = {
     name: '标准版',
     description: '更接近实际发音: oo-ee-ee-ah-ee-oh-oo-ee-ee-ee-ah-ee',
     sequence: ['U', 'I', 'I', 'A', 'I', 'O', 'U', 'I', 'I', 'I', 'A', 'I'],
-    hints: ['oo', 'ee', 'ee', 'ah', 'ee', 'oh', 'oo', 'ee', 'ee', 'ee', 'ah', 'ee']
+    hints: ['U', 'I', 'I', 'A', 'I', 'O', 'U', 'I', 'I', 'I', 'A', 'I']
   },
   /** 简化版：只用 O/I/A 三个元音 */
   simple: {
-    name: '简化版',
+    name: '流行版',
     description: '只用三个元音: O-I-I-A-I-O-I-I-I-A-I',
     sequence: ['O', 'I', 'I', 'A', 'I', 'O', 'I', 'I', 'I', 'A', 'I'],
-    hints: ['oh', 'ee', 'ee', 'ah', 'ee', 'oh', 'ee', 'ee', 'ee', 'ah', 'ee']
+    hints: ['O', 'I', 'I', 'A', 'I', 'O', 'I', 'I', 'I', 'A', 'I']
   }
 };
 
@@ -100,6 +100,8 @@ export function getSequenceHintText(): string {
  * | A    | 700-1000 Hz | 1200-1800 Hz  | F1 高，F2 中 (央低) |
  * | O    | 400-600 Hz  | 800-1200 Hz   | F1 中，F2 低 (后中) |
  */
+
+//这是标准元音共振峰范围配置，但oiiaioiiiai游戏中需要做调整以提升识别率
 export const DEFAULT_VOWEL_FORMANTS: VowelFormantConfig = {
   U: {
     f1: [300, 450],
@@ -124,6 +126,31 @@ export const DEFAULT_VOWEL_FORMANTS: VowelFormantConfig = {
 };
 
 /**
+export const DEFAULT_VOWEL_FORMANTS: VowelFormantConfig = {
+  U: {
+    f1: [230, 330],
+    f2: [718, 1500]
+  },
+  I: {
+    f1: [200, 400],
+    f2: [2000, 3000]
+  },
+  E: {
+    f1: [400, 600],
+    f2: [1800, 2400]
+  },
+  A: {
+    f1: [700, 1000],
+    f2: [1400, 2000]
+  },
+  O: {
+    f1: [400, 800],
+    f2: [800, 1200]
+  }
+};
+ */
+
+/**
  * 元音检测器默认配置
  */
 export const DEFAULT_VOWEL_DETECTOR_CONFIG: Required<VowelDetectorConfig> = {
@@ -139,6 +166,21 @@ export const DEFAULT_VOWEL_DETECTOR_CONFIG: Required<VowelDetectorConfig> = {
   confirmationFrames: 1,
   /** 元音共振峰配置 */
   vowelFormants: DEFAULT_VOWEL_FORMANTS
+};
+
+/**
+ * 音节检测配置
+ * 用于从音频中分割序列和音节
+ */
+export const SYLLABLE_DETECTION_CONFIG = {
+  /** 序列之间的最小间隔 (ms) - 超过此间隔视为新序列 */
+  sequenceGapMs: 300,
+  /** 音节之间的最小间隔 (ms) - 小于此间隔的发声段会合并 */
+  syllableGapMs: 20,
+  /** 最小音节时长 (ms) - 短于此时长的发声段会被忽略 */
+  minSyllableDurationMs: 50,
+  /** 能量阈值倍数 - 相对于噪声底的倍数，用于判断是否为有效发声 */
+  energyThresholdMultiplier: 1000
 };
 
 /**
