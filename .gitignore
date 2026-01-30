@@ -42,4 +42,12 @@ Thumbs.db
 # Test coverage
 coverage/
 
+# Model training files (large)
 model/timit/
+model/data/
+model/checkpoints/
+model/output/saved_model/
+model/output/*.keras
+
+# Keep the final TF.js model
+!model/output/tfjs_model/
