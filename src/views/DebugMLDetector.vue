@@ -601,9 +601,20 @@ const analyzeAudioFile = async (arrayBuffer: ArrayBuffer, fileName: string) => {
     counts[vowel] = 0;
   }
 
+  // ⚠️ 处理短音频：如果音频长度小于 INPUT_SAMPLES，进行 zero-padding（居中）
+  let audioToAnalyze = resampledAudio;
+  if (resampledLength < INPUT_SAMPLES) {
+    console.log(`⚠️ 音频太短 (${resampledLength} < ${INPUT_SAMPLES})，进行 zero-padding`);
+    const padded = new Float32Array(INPUT_SAMPLES);
+    const startPad = Math.floor((INPUT_SAMPLES - resampledLength) / 2);
+    padded.set(resampledAudio, startPad);
+    audioToAnalyze = padded;
+    console.log(`📊 Padding 后: ${audioToAnalyze.length} 样本 (填充位置: ${startPad})`);
+  }
+
   const stride = INPUT_SAMPLES / 2; // 50% 重叠
-  for (let i = 0; i + INPUT_SAMPLES <= resampledLength; i += stride) {
-    const chunk = resampledAudio.slice(i, i + INPUT_SAMPLES);
+  for (let i = 0; i + INPUT_SAMPLES <= audioToAnalyze.length; i += stride) {
+    const chunk = audioToAnalyze.slice(i, i + INPUT_SAMPLES);
     
     // 推理
     const input = tf.tensor2d(Array.from(chunk), [1, INPUT_SAMPLES]);
