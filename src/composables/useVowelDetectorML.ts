@@ -1,0 +1,446 @@
+import { ref, onUnmounted, type Ref } from 'vue';
+import * as tf from '@tensorflow/tfjs';
+import type {
+  Vowel,
+  VowelDetectorConfig,
+  VowelDetectionResult,
+  DetectionStatus,
+  VowelDetectedCallback,
+  SilenceCallback,
+  ErrorCallback
+} from '@/types/game';
+
+/**
+ * TensorFlow.js 基础的元音检测器返回类型
+ */
+export interface UseVowelDetectorMLReturn {
+  /** 当前检测结果（响应式） */
+  currentResult: Ref<VowelDetectionResult | null>;
+  /** 当前确认的元音（经过稳定性过滤） */
+  confirmedVowel: Ref<Vowel | null>;
+  /** 检测器状态 */
+  isListening: Ref<boolean>;
+  isInitialized: Ref<boolean>;
+  error: Ref<string | null>;
+  /** 控制方法 */
+  start: () => Promise<void>;
+  stop: () => void;
+  reset: () => void;
+  /** 事件回调注册 */
+  onVowelDetected: (callback: VowelDetectedCallback) => void;
+  onSilence: (callback: SilenceCallback) => void;
+  onError: (callback: ErrorCallback) => void;
+  /** 诊断方法 */
+  getAudioDiagnostics: () => Record<string, any>;
+}
+
+const VOWEL_CLASSES = ['A', 'E', 'I', 'O', 'U', 'silence'] as const;
+const INPUT_SAMPLES = 3360; // 210ms @ 16kHz
+const TARGET_SAMPLE_RATE = 16000; // 训练模型使用的采样率
+
+/**
+ * TensorFlow.js 元音检测器 Composable
+ * 使用 CNN 模型进行元音识别
+ * 
+ * @example
+ * ```ts
+ * const { confirmedVowel, start, stop, onVowelDetected } = useVowelDetectorML({
+ *   modelPath: '/models/vowel/model.json'
+ * });
+ * 
+ * onVowelDetected((vowel, result) => {
+ *   console.log(`检测到: ${vowel}, 置信度: ${result.confidence}`);
+ * });
+ * 
+ * await start();
+ * ```
+ */
+export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetectorMLReturn {
+  // ==================== 响应式状态 ====================
+  const currentResult = ref<VowelDetectionResult | null>(null);
+  const confirmedVowel = ref<Vowel | null>(null);
+  const isListening = ref(false);
+  const isInitialized = ref(false);
+  const error = ref<string | null>(null);
+
+  // ==================== 内部状态 ====================
+  let audioContext: AudioContext | null = null;
+  let mediaStream: MediaStream | null = null;
+  let model: tf.GraphModel | null = null;
+  let audioBuffer: Float32Array | null = null;
+  let resampleBuffer: Float32Array | null = null;
+  let bufferIndex = 0;
+  let resampleIndex = 0;
+  let animationFrameId: number | null = null;
+  let lastAnalysisTime = 0;
+  let actualSampleRate = 44100; // 实际采样率（会在初始化时检测）
+  let resampleRatio = 1; // 重采样比例
+  
+  // 元音检测状态
+  let lastConfirmedVowel: Vowel | null = null;
+  let hadGapSinceLastEmit = true;
+  
+  // 静音检测状态
+  let silenceStartTime: number | null = null;
+
+  // ==================== 事件回调 ====================
+  const vowelDetectedCallbacks: VowelDetectedCallback[] = [];
+  const silenceCallbacks: SilenceCallback[] = [];
+  const errorCallbacks: ErrorCallback[] = [];
+
+  function onVowelDetected(callback: VowelDetectedCallback): void {
+    vowelDetectedCallbacks.push(callback);
+  }
+
+  function onSilence(callback: SilenceCallback): void {
+    silenceCallbacks.push(callback);
+  }
+
+  function onError(callback: ErrorCallback): void {
+    errorCallbacks.push(callback);
+  }
+
+  function emitVowelDetected(vowel: Vowel, result: VowelDetectionResult): void {
+    vowelDetectedCallbacks.forEach(cb => cb(vowel, result));
+  }
+
+  function emitSilence(duration: number): void {
+    silenceCallbacks.forEach(cb => cb(duration));
+  }
+
+  function emitError(err: Error): void {
+    errorCallbacks.forEach(cb => cb(err));
+  }
+
+  // ==================== 模型初始化 ====================
+  async function loadModel(): Promise<void> {
+    try {
+      const modelPath = config?.modelPath || '/models/vowel/model.json';
+      model = (await tf.loadGraphModel(modelPath)) as tf.GraphModel;
+      console.log('✅ 元音识别模型已加载');
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      error.value = `模型加载失败: ${e.message}`;
+      emitError(e);
+      throw e;
+    }
+  }
+
+  // ==================== 音频初始化 ====================
+  async function initAudio(): Promise<void> {
+    try {
+      // 请求麦克风权限
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+
+      // 创建音频上下文（不指定采样率，让系统使用默认值）
+      audioContext = new AudioContext();
+      
+      // ⚠️ 关键：获取实际采样率
+      actualSampleRate = audioContext.sampleRate;
+      resampleRatio = TARGET_SAMPLE_RATE / actualSampleRate;
+      
+      console.log(`📊 实际采样率: ${actualSampleRate} Hz`);
+      console.log(`📊 目标采样率: ${TARGET_SAMPLE_RATE} Hz`);
+      console.log(`📊 重采样比例: ${resampleRatio.toFixed(4)}`);
+      
+      // 计算重采样后的缓冲区大小
+      // 如果实际采样率是 44100Hz，重采样到 16000Hz 后，
+      // 每个 4096 样本的音频块会变成 ~1495 样本
+      const maxResampledSize = Math.ceil(4096 * resampleRatio) * 2;
+      resampleBuffer = new Float32Array(maxResampledSize);
+      
+      // 创建音频缓冲区（用于存储重采样后的数据）
+      audioBuffer = new Float32Array(INPUT_SAMPLES);
+      bufferIndex = 0;
+      resampleIndex = 0;
+
+      // 创建 ScriptProcessorNode 用于收集音频数据
+      // 使用 4096 样本的缓冲大小（标准值）
+      const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+      
+      scriptNode.onaudioprocess = (event: AudioProcessingEvent) => {
+        const inputData = event.inputBuffer.getChannelData(0);
+        
+        // ⚠️ 关键：对每个样本进行重采样
+        let resamplePos = 0;
+        for (let i = 0; i < inputData.length; i++) {
+          // 计算在重采样后的位置
+          const resampledPos = i * resampleRatio;
+          const fracPart = resampledPos % 1;
+          const intPart = Math.floor(resampledPos);
+          
+          // 线性插值重采样
+          let sample: number;
+          if (intPart >= inputData.length - 1) {
+            sample = inputData[inputData.length - 1];
+          } else {
+            // 线性插值
+            const sample1 = inputData[intPart];
+            const sample2 = inputData[intPart + 1];
+            sample = sample1 * (1 - fracPart) + sample2 * fracPart;
+          }
+          
+          // 将重采样后的数据放入缓冲区
+          if (resamplePos < 4096 * resampleRatio) {
+            resampleBuffer![resamplePos] = sample;
+            resamplePos++;
+          }
+        }
+        
+        // 将重采样后的数据复制到主缓冲区
+        for (let i = 0; i < resamplePos; i++) {
+          audioBuffer![bufferIndex] = resampleBuffer![i];
+          bufferIndex = (bufferIndex + 1) % INPUT_SAMPLES;
+        }
+      };
+
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      source.connect(scriptNode);
+      scriptNode.connect(audioContext.destination);
+
+      isInitialized.value = true;
+      error.value = null;
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      error.value = `麦克风初始化失败: ${e.message}`;
+      emitError(e);
+      throw e;
+    }
+  }
+
+  // ==================== 音频预处理和推理 ====================
+  async function analyzeAudio(): Promise<void> {
+    if (!model || !audioBuffer || !isListening.value) return;
+
+    const now = performance.now();
+    // ⚠️ 关键：使用目标采样率计算帧时间（不是实际采样率）
+    const frameTime = (INPUT_SAMPLES / TARGET_SAMPLE_RATE) * 1000; // ms 为单位的帧时间
+    
+    // 控制分析频率
+    if (now - lastAnalysisTime < frameTime * 0.5) {
+      animationFrameId = requestAnimationFrame(analyzeAudio);
+      return;
+    }
+    lastAnalysisTime = now;
+
+    try {
+      // 获取音频数据的副本
+      const audioData = new Float32Array(audioBuffer);
+
+      // 计算音量
+      const volume = calculateVolume(audioData);
+
+      // 判断是否静音
+      if (volume < -40) {
+        handleSilence(now, volume);
+      } else {
+        // 重置静音计时
+        silenceStartTime = null;
+
+        // 转换为 Tensor 并进行推理
+        const input = tf.tensor2d(Array.from(audioData), [1, INPUT_SAMPLES]);
+        const predictions = model!.predict(input) as tf.Tensor;
+        const probabilities = await predictions.data();
+        
+        // 获取最高置信度的类
+        let maxIdx = 0;
+        let maxProb = 0;
+        for (let i = 0; i < probabilities.length; i++) {
+          if (probabilities[i] > maxProb) {
+            maxProb = probabilities[i];
+            maxIdx = i;
+          }
+        }
+
+        const vowel = VOWEL_CLASSES[maxIdx] as Vowel;
+        const confidence = Math.min(1, Math.max(0, maxProb)); // 归一化到 [0, 1]
+
+        // 确定检测状态
+        const status: DetectionStatus = confidence > 0.5 ? 'detected' : 'ambiguous';
+
+        const result: VowelDetectionResult = {
+          vowel: status === 'detected' ? vowel : null,
+          status,
+          confidence,
+          formants: { f1: 0, f2: 0 }, // ML 模型不直接输出共振峰
+          volume,
+          timestamp: now
+        };
+        currentResult.value = result;
+
+        // 处理元音检测结果
+        if (status === 'detected') {
+          handleVowelDetected(vowel, result);
+        }
+
+        // 清理
+        input.dispose();
+        predictions.dispose();
+        tf.dispose(probabilities);
+      }
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      console.error('推理错误:', e);
+      emitError(e);
+    }
+
+    animationFrameId = requestAnimationFrame(analyzeAudio);
+  }
+
+  // ==================== 音量计算 ====================
+  function calculateVolume(audioData: Float32Array): number {
+    let sum = 0;
+    for (let i = 0; i < audioData.length; i++) {
+      sum += audioData[i] * audioData[i];
+    }
+    const rms = Math.sqrt(sum / audioData.length);
+    const db = rms > 0 ? 20 * Math.log10(rms) : -100;
+    return Math.max(-100, Math.min(0, db)); // 限制范围在 -100 到 0
+  }
+
+  // ==================== 元音检测处理 ====================
+  function handleVowelDetected(vowel: Vowel, result: VowelDetectionResult): void {
+    const isNewVowel = vowel !== lastConfirmedVowel;
+    
+    // 触发条件：元音变化 或 经过了静音间隔
+    if (isNewVowel || hadGapSinceLastEmit) {
+      confirmedVowel.value = vowel;
+      lastConfirmedVowel = vowel;
+      hadGapSinceLastEmit = false;
+      emitVowelDetected(vowel, result);
+    }
+  }
+
+  // ==================== 静音处理 ====================
+  function handleSilence(now: number, volume: number): void {
+    if (silenceStartTime === null) {
+      silenceStartTime = now;
+    } else {
+      emitSilence(now - silenceStartTime);
+    }
+    
+    currentResult.value = {
+      vowel: null,
+      status: 'silence',
+      confidence: 0,
+      formants: { f1: 0, f2: 0 },
+      volume,
+      timestamp: now
+    };
+    
+    hadGapSinceLastEmit = true;
+    confirmedVowel.value = null;
+    lastConfirmedVowel = null;
+  }
+
+  // ==================== 控制方法 ====================
+  async function start(): Promise<void> {
+    if (isListening.value) return;
+
+    if (!isInitialized.value) {
+      await initAudio();
+      await loadModel();
+    }
+
+    // 确保 AudioContext 处于运行状态
+    if (audioContext?.state === 'suspended') {
+      await audioContext.resume();
+    }
+
+    isListening.value = true;
+    lastAnalysisTime = 0;
+    silenceStartTime = null;
+    bufferIndex = 0;
+    
+    // 开始分析循环
+    analyzeAudio();
+  }
+
+  function stop(): void {
+    isListening.value = false;
+    
+    if (animationFrameId !== null) {
+      cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+    }
+    
+    confirmedVowel.value = null;
+    lastConfirmedVowel = null;
+    hadGapSinceLastEmit = true;
+  }
+
+  function reset(): void {
+    stop();
+    
+    // 释放资源
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(track => track.stop());
+      mediaStream = null;
+    }
+    
+    if (audioContext) {
+      audioContext.close();
+      audioContext = null;
+    }
+    
+    if (model) {
+      model.dispose();
+      model = null;
+    }
+
+    audioBuffer = null;
+    resampleBuffer = null;
+    bufferIndex = 0;
+    resampleIndex = 0;
+    
+    isInitialized.value = false;
+    currentResult.value = null;
+    error.value = null;
+  }
+
+  // ==================== 诊断和调试 ====================
+  /**
+   * 获取音频格式诊断信息
+   * 用于调试采样率不匹配问题
+   */
+  function getAudioDiagnostics() {
+    return {
+      targetSampleRate: TARGET_SAMPLE_RATE,
+      actualSampleRate: actualSampleRate,
+      resampleRatio: resampleRatio,
+      inputSamples: INPUT_SAMPLES,
+      expectedDurationMs: (INPUT_SAMPLES / TARGET_SAMPLE_RATE) * 1000,
+      actualDurationMs: (INPUT_SAMPLES / actualSampleRate) * 1000,
+      audioContextState: audioContext?.state,
+      isInitialized: isInitialized.value,
+      isListening: isListening.value
+    };
+  }
+
+  // ==================== 生命周期 ====================
+  onUnmounted(() => {
+    reset();
+  });
+
+  // ==================== 返回 ====================
+  return {
+    currentResult,
+    confirmedVowel,
+    isListening,
+    isInitialized,
+    error,
+    start,
+    stop,
+    reset,
+    onVowelDetected,
+    onSilence,
+    onError,
+    getAudioDiagnostics
+  };
+}

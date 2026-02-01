@@ -4,11 +4,12 @@
  * 元音类型
  * - U: /u/ 如 "oo" in "boot"
  * - I: /i/ 如 "ee" in "see"
- * - E: /e/ 如 "e" in "bed" (可选)
+ * - E: /e/ 如 "e" in "bed"
  * - A: /ɑ/ 如 "ah" in "father"
  * - O: /oʊ/ 如 "o" in "go"
+ * - silence: 静音
  */
-export type Vowel = 'U' | 'I' | 'E' | 'A' | 'O';
+export type Vowel = 'U' | 'I' | 'E' | 'A' | 'O' | 'silence';
 
 /** 检测结果状态 */
 export type DetectionStatus = 'detected' | 'silence' | 'noise' | 'ambiguous';
@@ -55,6 +56,8 @@ export interface VowelDetectorConfig {
   confirmationFrames?: number;
   /** 元音共振峰配置（可覆盖默认值） */
   vowelFormants?: VowelFormantConfig;
+  /** TensorFlow.js 模型路径 (ML 检测器) */
+  modelPath?: string;
 }
 
 // ==================== 游戏状态相关类型 ====================
