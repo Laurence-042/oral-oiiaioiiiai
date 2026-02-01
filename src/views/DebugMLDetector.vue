@@ -101,6 +101,114 @@
       </div>
     </section>
 
+    <!-- ==================== 离线分析面板 ==================== -->
+    <section class="offline-analysis">
+      <h2>📁 离线音频分析</h2>
+      <p class="section-desc">上传音频文件（WAV/MP3），分析元音占比和分布</p>
+
+      <div class="upload-section">
+        <div class="upload-box">
+          <input 
+            id="audio-file"
+            ref="audioFileInput"
+            type="file"
+            accept="audio/wav,audio/mpeg,.wav,.mp3"
+            @change="handleFileSelected"
+            class="file-input"
+          />
+          <label for="audio-file" class="upload-label">
+            <span class="upload-icon">📤</span>
+            <span class="upload-text">点击选择音频文件或拖拽上传</span>
+            <span class="upload-hint">(WAV/MP3 格式)</span>
+          </label>
+        </div>
+
+        <div v-if="analysisState.analyzing" class="analysis-progress">
+          <div class="progress-spinner"></div>
+          <p>分析中... {{ Math.round(analysisState.progress * 100) }}%</p>
+        </div>
+
+        <div v-if="analysisState.error" class="error-message">
+          <span class="error-icon">❌</span>
+          {{ analysisState.error }}
+        </div>
+      </div>
+
+      <!-- 分析结果 -->
+      <div v-if="analysisResult" class="analysis-result">
+        <div class="result-header">
+          <h3>📊 分析结果</h3>
+          <p class="file-info">{{ analysisResult.fileName }} - {{ (analysisResult.duration / 1000).toFixed(2) }}s</p>
+        </div>
+
+        <!-- 元音占比 -->
+        <div class="vowel-ratio">
+          <h4>元音占比分布</h4>
+          <div class="ratio-chart">
+            <div 
+              v-for="vowel in VOWEL_CLASSES"
+              :key="vowel"
+              class="ratio-item"
+            >
+              <div class="ratio-bar-wrapper">
+                <span class="ratio-label">{{ vowel }}</span>
+                <div class="ratio-bar">
+                  <div 
+                    class="ratio-fill"
+                    :style="{ width: `${(analysisResult.ratios[vowel] ?? 0) * 100}%` }"
+                  ></div>
+                </div>
+              </div>
+              <span class="ratio-value">
+                {{ ((analysisResult.ratios[vowel] ?? 0) * 100).toFixed(1) }}%
+                ({{ analysisResult.counts[vowel] ?? 0 }})
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 详细统计 -->
+        <div class="analysis-stats">
+          <div class="stat-box">
+            <div class="stat-label">总帧数</div>
+            <div class="stat-val">{{ analysisResult.totalFrames }}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">采样率</div>
+            <div class="stat-val">{{ analysisResult.sampleRate }} Hz</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">时长</div>
+            <div class="stat-val">{{ (analysisResult.duration / 1000).toFixed(2) }}s</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">平均置信度</div>
+            <div class="stat-val">{{ (analysisResult.avgConfidence * 100).toFixed(1) }}%</div>
+          </div>
+        </div>
+
+        <!-- 时间轴可视化 -->
+        <div class="timeline-analysis">
+          <h4>元音时间轴</h4>
+          <div class="timeline">
+            <div 
+              v-for="(frame, idx) in analysisResult.timeline.slice(0, 200)"
+              :key="idx"
+              class="timeline-bar"
+              :class="`vowel-${frame}`"
+              :title="`${frame} (${idx})`"
+            ></div>
+          </div>
+          <div class="timeline-legend">
+            <div v-for="vowel in VOWEL_CLASSES" :key="vowel" class="legend-item">
+              <div class="legend-color" :class="`vowel-${vowel}`"></div>
+              <span>{{ vowel }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ==================== 控制面板 ==================== -->
     <section class="control-panel">
       <h2>⚙️ 控制面板</h2>
@@ -296,6 +404,25 @@ const detectionHistory = ref<Array<{
   duration: number;
 }>>([]);
 const latestProbabilities = ref<number[] | null>(null);
+const audioFileInput = ref<HTMLInputElement | null>(null);
+
+// ==================== 离线分析状态 ====================
+const analysisState = ref({
+  analyzing: false,
+  progress: 0,
+  error: ''
+});
+
+const analysisResult = ref<{
+  fileName: string;
+  duration: number;
+  sampleRate: number;
+  totalFrames: number;
+  ratios: Record<string, number>;
+  counts: Record<string, number>;
+  avgConfidence: number;
+  timeline: Vowel[];
+} | null>(null);
 
 // ==================== 统计数据 ====================
 const stats = reactive({
@@ -392,6 +519,150 @@ const formatTime = (timestamp: number): string => {
     minute: '2-digit',
     second: '2-digit'
   });
+};
+
+// ==================== 离线音频分析 ====================
+const handleFileSelected = async (event: Event) => {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+
+  analysisState.value = { analyzing: true, progress: 0, error: '' };
+  analysisResult.value = null;
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    await analyzeAudioFile(arrayBuffer, file.name);
+  } catch (err) {
+    analysisState.value.error = `分析失败: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    analysisState.value.analyzing = false;
+  }
+
+  // 重置输入
+  if (audioFileInput.value) {
+    audioFileInput.value.value = '';
+  }
+};
+
+const analyzeAudioFile = async (arrayBuffer: ArrayBuffer, fileName: string) => {
+  // 导入 TensorFlow.js
+  const tf = await import('@tensorflow/tfjs');
+
+  // 解码音频
+  const audioContext = new AudioContext();
+  const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+  const rawAudio = audioBuffer.getChannelData(0);
+  const originalSampleRate = audioBuffer.sampleRate;
+
+  console.log(`📊 音频信息: ${fileName}`);
+  console.log(`  采样率: ${originalSampleRate} Hz`);
+  console.log(`  时长: ${(audioBuffer.duration * 1000).toFixed(0)} ms`);
+  console.log(`  样本数: ${rawAudio.length}`);
+
+  // ⚠️ 重采样到 16000Hz（模型训练的采样率）
+  const TARGET_SAMPLE_RATE = 16000;
+  const INPUT_SAMPLES = 3360; // 210ms @ 16000Hz
+  const resampleRatio = TARGET_SAMPLE_RATE / originalSampleRate;
+  
+  const resampledLength = Math.ceil(rawAudio.length * resampleRatio);
+  const resampledAudio = new Float32Array(resampledLength);
+
+  // 线性插值重采样
+  for (let i = 0; i < resampledLength; i++) {
+    const sourcePos = i / resampleRatio;
+    const intPart = Math.floor(sourcePos);
+    const fracPart = sourcePos % 1;
+
+    if (intPart >= rawAudio.length - 1) {
+      resampledAudio[i] = rawAudio[rawAudio.length - 1];
+    } else {
+      resampledAudio[i] = 
+        rawAudio[intPart] * (1 - fracPart) + 
+        rawAudio[intPart + 1] * fracPart;
+    }
+  }
+
+  console.log(`📊 重采样后: ${resampledLength} 样本 @ ${TARGET_SAMPLE_RATE} Hz`);
+
+  // 获取模型
+  const modelPath = '/models/vowel/model.json';
+  const model = await tf.loadGraphModel(modelPath) as any;
+
+  // 分析音频（滑动窗口）
+  const ratios: Record<string, number> = {};
+  const counts: Record<string, number> = {};
+  const timeline: Vowel[] = [];
+  let totalConfidence = 0;
+  let frameCount = 0;
+
+  for (const vowel of VOWEL_CLASSES) {
+    ratios[vowel] = 0;
+    counts[vowel] = 0;
+  }
+
+  const stride = INPUT_SAMPLES / 2; // 50% 重叠
+  for (let i = 0; i + INPUT_SAMPLES <= resampledLength; i += stride) {
+    const chunk = resampledAudio.slice(i, i + INPUT_SAMPLES);
+    
+    // 推理
+    const input = tf.tensor2d(Array.from(chunk), [1, INPUT_SAMPLES]);
+    const predictions = model.predict(input) as any;
+    const probs = await predictions.data();
+
+    // 获取最高概率的类
+    let maxIdx = 0;
+    let maxProb = 0;
+    for (let j = 0; j < probs.length; j++) {
+      if (probs[j] > maxProb) {
+        maxProb = probs[j];
+        maxIdx = j;
+      }
+    }
+
+    const vowel = VOWEL_CLASSES[maxIdx];
+    timeline.push(vowel);
+    counts[vowel]++;
+    totalConfidence += maxProb;
+    frameCount++;
+
+    // 更新进度
+    analysisState.value.progress = i / (resampledLength - INPUT_SAMPLES);
+
+    // 清理
+    input.dispose();
+    predictions.dispose();
+    tf.dispose(probs);
+
+    // 避免 UI 卡顿
+    if (frameCount % 50 === 0) {
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+
+  // 计算占比
+  for (const vowel of VOWEL_CLASSES) {
+    ratios[vowel] = frameCount > 0 ? counts[vowel] / frameCount : 0;
+  }
+
+  // 保存结果
+  analysisResult.value = {
+    fileName,
+    duration: audioBuffer.duration * 1000,
+    sampleRate: TARGET_SAMPLE_RATE,
+    totalFrames: frameCount,
+    ratios,
+    counts,
+    avgConfidence: frameCount > 0 ? totalConfidence / frameCount : 0,
+    timeline
+  };
+
+  console.log('✅ 分析完成', analysisResult.value);
+
+  // 清理
+  model.dispose();
+  audioContext.close();
+  analysisState.value.progress = 1;
 };
 
 // ==================== 初始化回调 ====================
@@ -827,6 +1098,304 @@ section h2 {
   color: #ff4d4f;
   font-weight: bold;
 }
+
+/* ==================== 离线分析样式 ==================== */
+.offline-analysis {
+  background: linear-gradient(135deg, #fafafa 0%, #f5f5f5 100%);
+}
+
+.section-desc {
+  color: #666;
+  font-size: 14px;
+  margin: 0 0 15px;
+}
+
+.upload-section {
+  margin-bottom: 20px;
+}
+
+.upload-box {
+  position: relative;
+  border: 2px dashed #d9d9d9;
+  border-radius: 8px;
+  padding: 40px;
+  text-align: center;
+  transition: all 0.3s;
+}
+
+.upload-box:hover {
+  border-color: #40a9ff;
+  background: #fafafa;
+}
+
+.file-input {
+  display: none;
+}
+
+.upload-label {
+  cursor: pointer;
+  display: block;
+}
+
+.upload-icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 10px;
+}
+
+.upload-text {
+  display: block;
+  font-size: 16px;
+  color: #333;
+  font-weight: 500;
+  margin-bottom: 5px;
+}
+
+.upload-hint {
+  display: block;
+  font-size: 12px;
+  color: #999;
+}
+
+.analysis-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+  background: #f9f9f9;
+  border-radius: 8px;
+}
+
+.progress-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #1890ff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 15px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.error-message {
+  background: #fff1f0;
+  border: 1px solid #ffa39e;
+  border-radius: 4px;
+  padding: 12px 16px;
+  color: #cf1322;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.error-icon {
+  font-size: 16px;
+}
+
+/* 分析结果样式 */
+.analysis-result {
+  background: linear-gradient(135deg, #fafafa 0%, #f0f2f5 100%);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.result-header {
+  margin-bottom: 20px;
+  border-bottom: 2px solid #e8e8e8;
+  padding-bottom: 15px;
+}
+
+.result-header h3 {
+  margin: 0 0 5px;
+  color: #333;
+}
+
+.file-info {
+  margin: 0;
+  color: #999;
+  font-size: 13px;
+}
+
+/* 元音占比 */
+.vowel-ratio {
+  margin-bottom: 25px;
+}
+
+.vowel-ratio h4 {
+  margin: 0 0 15px;
+  color: #333;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ratio-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ratio-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ratio-bar-wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ratio-label {
+  min-width: 30px;
+  text-align: center;
+  font-weight: 600;
+  color: #333;
+}
+
+.ratio-bar {
+  flex: 1;
+  height: 24px;
+  background: #e8e8e8;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.ratio-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  transition: width 0.3s;
+}
+
+.ratio-value {
+  min-width: 85px;
+  text-align: right;
+  font-size: 13px;
+  color: #666;
+}
+
+/* 分析统计 */
+.analysis-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 15px;
+  margin-bottom: 25px;
+}
+
+.stat-box {
+  background: white;
+  padding: 15px;
+  border-radius: 6px;
+  text-align: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+}
+
+.stat-box .stat-label {
+  font-size: 12px;
+  color: #999;
+  margin-bottom: 8px;
+}
+
+.stat-box .stat-val {
+  font-size: 20px;
+  font-weight: 600;
+  color: #333;
+}
+
+/* 时间轴 */
+.timeline-analysis {
+  border-top: 2px solid #e8e8e8;
+  padding-top: 20px;
+}
+
+.timeline-analysis h4 {
+  margin: 0 0 12px;
+  color: #333;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.timeline {
+  display: flex;
+  gap: 1px;
+  height: 30px;
+  margin-bottom: 12px;
+  background: white;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.timeline-bar {
+  flex: 1;
+  min-width: 2px;
+  transition: all 0.2s;
+}
+
+.timeline-bar:hover {
+  filter: brightness(0.9);
+}
+
+/* 元音颜色 */
+.timeline-bar.vowel-A,
+.ratio-fill,
+.vowel-A {
+  background-color: #ff4d4f;
+}
+
+.timeline-bar.vowel-E {
+  background-color: #fa8c16;
+}
+
+.timeline-bar.vowel-I {
+  background-color: #faad14;
+}
+
+.timeline-bar.vowel-O {
+  background-color: #1890ff;
+}
+
+.timeline-bar.vowel-U {
+  background-color: #722ed1;
+}
+
+.timeline-bar.vowel-silence {
+  background-color: #d9d9d9;
+}
+
+.timeline-legend {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-top: 1px solid #e8e8e8;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.legend-color {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+}
+
+.legend-color.vowel-A { background-color: #ff4d4f; }
+.legend-color.vowel-E { background-color: #fa8c16; }
+.legend-color.vowel-I { background-color: #faad14; }
+.legend-color.vowel-O { background-color: #1890ff; }
+.legend-color.vowel-U { background-color: #722ed1; }
+.legend-color.vowel-silence { background-color: #d9d9d9; }
 
 .status-row .pending {
   color: #ffa940;
