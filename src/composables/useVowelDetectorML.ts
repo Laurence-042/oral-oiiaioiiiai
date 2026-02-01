@@ -167,35 +167,26 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
       scriptNode.onaudioprocess = (event: AudioProcessingEvent) => {
         const inputData = event.inputBuffer.getChannelData(0);
         
-        // ⚠️ 关键：对每个样本进行重采样
-        let resamplePos = 0;
-        for (let i = 0; i < inputData.length; i++) {
-          // 计算在重采样后的位置
-          const resampledPos = i * resampleRatio;
-          const fracPart = resampledPos % 1;
-          const intPart = Math.floor(resampledPos);
+        // ⚠️ 正确的重采样：从高采样率降到低采样率
+        // 例如：44100Hz -> 16000Hz，每 2.76 个源样本产生 1 个目标样本
+        const resampledLength = Math.ceil(inputData.length * resampleRatio);
+        
+        for (let i = 0; i < resampledLength; i++) {
+          // 计算在源数组中的位置
+          const sourcePos = i / resampleRatio;
+          const intPart = Math.floor(sourcePos);
+          const fracPart = sourcePos - intPart;
           
-          // 线性插值重采样
+          // 线性插值
           let sample: number;
           if (intPart >= inputData.length - 1) {
             sample = inputData[inputData.length - 1];
           } else {
-            // 线性插值
-            const sample1 = inputData[intPart];
-            const sample2 = inputData[intPart + 1];
-            sample = sample1 * (1 - fracPart) + sample2 * fracPart;
+            sample = inputData[intPart] * (1 - fracPart) + inputData[intPart + 1] * fracPart;
           }
           
-          // 将重采样后的数据放入缓冲区
-          if (resamplePos < 4096 * resampleRatio) {
-            resampleBuffer![resamplePos] = sample;
-            resamplePos++;
-          }
-        }
-        
-        // 将重采样后的数据复制到主缓冲区
-        for (let i = 0; i < resamplePos; i++) {
-          audioBuffer![bufferIndex] = resampleBuffer![i];
+          // 将重采样后的数据放入主缓冲区（循环缓冲）
+          audioBuffer![bufferIndex] = sample;
           bufferIndex = (bufferIndex + 1) % INPUT_SAMPLES;
         }
       };
@@ -230,8 +221,14 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
     lastAnalysisTime = now;
 
     try {
-      // 获取音频数据的副本
-      const audioData = new Float32Array(audioBuffer);
+      // 从循环缓冲区正确读取数据
+      // audioBuffer 是循环缓冲区，bufferIndex 指向下一个要写入的位置
+      // 正确的顺序是：[bufferIndex...end] + [0...bufferIndex-1]
+      const audioData = new Float32Array(INPUT_SAMPLES);
+      for (let i = 0; i < INPUT_SAMPLES; i++) {
+        // 从 bufferIndex 开始读取，回绕到开头
+        audioData[i] = audioBuffer[(bufferIndex + i) % INPUT_SAMPLES];
+      }
 
       // 计算音量
       const volume = calculateVolume(audioData);
