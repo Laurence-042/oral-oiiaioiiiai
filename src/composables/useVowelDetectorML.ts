@@ -22,6 +22,8 @@ export interface UseVowelDetectorMLReturn {
   isListening: Ref<boolean>;
   isInitialized: Ref<boolean>;
   error: Ref<string | null>;
+  /** 最新的各类别概率分布 [A, E, I, O, U, silence] */
+  latestProbabilities: Ref<number[] | null>;
   /** 控制方法 */
   start: () => Promise<void>;
   stop: () => void;
@@ -62,6 +64,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
   const isListening = ref(false);
   const isInitialized = ref(false);
   const error = ref<string | null>(null);
+  const latestProbabilities = ref<number[] | null>(null);  // 最新的各类别概率
 
   // ==================== 内部状态 ====================
   let audioContext: AudioContext | null = null;
@@ -244,6 +247,9 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
         const input = tf.tensor2d(Array.from(audioData), [1, INPUT_SAMPLES]);
         const predictions = model!.predict(input) as tf.Tensor;
         const probabilities = await predictions.data();
+        
+        // 更新最新概率分布（用于 UI 显示）
+        latestProbabilities.value = Array.from(probabilities);
         
         // 获取最高置信度的类
         let maxIdx = 0;
@@ -432,6 +438,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
     isListening,
     isInitialized,
     error,
+    latestProbabilities,
     start,
     stop,
     reset,

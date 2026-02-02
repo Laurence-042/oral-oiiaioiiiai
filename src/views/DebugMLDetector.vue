@@ -12,10 +12,6 @@
         <div class="stat-value">{{ stats.totalDetections }}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">准确率</div>
-        <div class="stat-value">{{ (stats.accuracy * 100).toFixed(1) }}%</div>
-      </div>
-      <div class="stat-card">
         <div class="stat-label">平均延迟</div>
         <div class="stat-value">{{ stats.avgLatency.toFixed(0) }}ms</div>
       </div>
@@ -386,6 +382,7 @@ const {
   isListening,
   isInitialized,
   error,
+  latestProbabilities,
   start,
   stop,
   reset,
@@ -403,7 +400,6 @@ const detectionHistory = ref<Array<{
   timestamp: number;
   duration: number;
 }>>([]);
-const latestProbabilities = ref<number[] | null>(null);
 const audioFileInput = ref<HTMLInputElement | null>(null);
 
 // ==================== 离线分析状态 ====================
@@ -427,7 +423,6 @@ const analysisResult = ref<{
 // ==================== 统计数据 ====================
 const stats = reactive({
   totalDetections: 0,
-  accuracy: 0.95,
   avgLatency: 0,
   latencyStats: { min: Infinity, max: -Infinity, avg: 0 },
   confidenceStats: { min: 1, max: 0, avg: 0 },
