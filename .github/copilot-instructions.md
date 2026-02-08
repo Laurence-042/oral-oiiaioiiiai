@@ -1,358 +1,293 @@
-# 🤖 Copilot 项目指导
+# OIIAIOIIIAI - AI Coding Agent Instructions
 
-## 📋 项目概述
+**Project**: Real-time vowel recognition game using TensorFlow.js CNN model  
+**Stack**: Vue 3 + TypeScript + TensorFlow.js + Vite  
+**Status**: Production-ready ML detector, game logic in development
 
-**项目名**: OIIAIOIIIAI - 元音识别游戏  
-**技术栈**: Vue 3 + TypeScript + TensorFlow.js  
-**状态**: ML 检测器集成完成，生产就绪  
-**最后更新**: 2026-02-01
+## Quick Start
 
----
+```bash
+npm run dev              # Dev server on http://localhost:3000
+npm run build            # Production build (runs vue-tsc + vite)
+npx tsc --noEmit        # Type checking only
+```
 
-## 🎯 核心功能
+**Test the detector**: Navigate to `/debug-ml` after starting dev server
 
-### 元音检测系统
-- **原方案**: 共振峰 (F1/F2) 分析，准确率 ~70%
-- **新方案**: CNN 模型，准确率 ~92% ✨
-- **输入**: 16kHz 音频，3360 采样 (210ms 窗口)
-- **输出**: 6 类分类 (A, E, I, O, U, silence)
-- **模型**: uint8 量化，70 KB
+## Architecture Overview
 
-### 关键组件
+### Core Components
 
-#### 1. ML 检测器 (生产就绪)
+1. **ML Vowel Detector** ([src/composables/useVowelDetectorML.ts](src/composables/useVowelDetectorML.ts))
+   - CNN model trained on TIMIT dataset (92% accuracy)
+   - Input: 3360 audio samples (210ms @ 16kHz)
+   - Output: 6-class probabilities (A, E, I, O, U, silence)
+   - Real-time audio processing via Web Audio API `ScriptProcessorNode`
+   - Auto-resampling from browser's native rate to 16kHz
+
+2. **Legacy Formant Detector** ([src/composables/useVowelDetector.ts](src/composables/useVowelDetector.ts))
+   - FFT-based F1/F2 formant analysis (~70% accuracy)
+   - Kept as fallback/reference implementation
+
+3. **Game State Manager** ([src/composables/useGameState.ts](src/composables/useGameState.ts))
+   - Score tracking, combo system, stage progression
+   - Sequence validation against target vowel patterns
+   - Interrupt handling (silence timeout, errors)
+
+### Data Flow
+
+```
+Microphone → AudioContext → ScriptProcessor → Resample Buffer (16kHz)
+    ↓
+Fill 3360 samples → TensorFlow.js CNN → Softmax probabilities
+    ↓
+Confidence filter → VowelDetectionResult → Event callbacks
+    ↓
+Game Logic (useGameState) → UI Updates
+```
+
+### Key Type Definitions
+
+All types in [src/types/game.ts](src/types/game.ts):
+- `Vowel`: `'A' | 'E' | 'I' | 'O' | 'U' | 'silence'`
+- `VowelDetectionResult`: Contains `{ vowel, status, confidence, formants, volume, timestamp }`
+- `GameStats`: Score, combo, stage, sequence progress
+- `StageVisualConfig`: Per-stage effects (rotation speed, particles, chromatic aberration)
+
+## Critical Patterns
+
+### Using the ML Detector
+
 ```typescript
-// 使用方式
 import { useVowelDetectorML } from '@/composables/useVowelDetectorML';
 
-const { confirmedVowel, start, stop, onVowelDetected } = useVowelDetectorML({
-  modelPath: '/models/vowel/model.json'
+const { confirmedVowel, currentResult, start, stop, onVowelDetected } = useVowelDetectorML({
+  modelPath: '/models/vowel/model.json' // optional, this is default
 });
 
+// Register callbacks BEFORE starting
 onVowelDetected((vowel, result) => {
-  console.log(`检测到: ${vowel}, 置信度: ${result.confidence}`);
+  console.log(`Detected: ${vowel}, confidence: ${result.confidence}`);
+});
+
+// Lifecycle
+onMounted(() => start());
+onUnmounted(() => {
+  stop();
+  // Model cleanup handled automatically
 });
 ```
 
-**文件**: `src/composables/useVowelDetectorML.ts`  
-**特性**: 实时音频处理、错误处理、事件回调、资源清理
+**Always call callbacks before `start()`** - the detector begins processing immediately after initialization.
 
-#### 2. 调试页面 (完整实现)
-**文件**: `src/views/DebugMLDetector.vue`  
-**功能**: 6 个模块
-- 📊 快速统计 (4 指标)
-- 🔴 实时检测 (6 分类)
-- ⚙️ 控制面板 (4 按钮)
-- 📋 检测历史 (50 条)
-- ⚡ 性能分析 (统计)
-- 🐛 调试信息 (3 标签)
+### Component Cleanup
 
-**访问**: `/debug-ml`
+TensorFlow.js requires explicit memory management:
 
-#### 3. 演示组件 (参考)
-**文件**: `src/components/VowelDetectorMLDemo.vue`  
-**用途**: 简单的检测演示
-
----
-
-## 📦 模型与依赖
-
-### 模型文件
-```
-public/models/vowel/
-├── model.json           (37 KB)  - 模型结构
-└── group1-shard1of1.bin (69 KB)  - 权重数据
-```
-
-**源文件**: `model/tfjs_model/` (备份)
-
-### 关键依赖
-```json
-{
-  "@tensorflow/tfjs": "^4.22.0",
-  "vue": "^3.4.0",
-  "vue-router": "^4.2.0",
-  "typescript": "^5.3.0"
+```typescript
+// In useVowelDetectorML cleanup
+if (model) {
+  model.dispose();
+  tf.disposeVariables(); // Clean up any leaked tensors
 }
 ```
 
-**安装**: `npm install @tensorflow/tfjs`
+When writing new TensorFlow code, wrap operations in `tf.tidy()`:
 
----
-
-## 🚀 快速启动
-
-### 开发环境
-```bash
-npm run dev
-# 访问: http://localhost:5173/debug-ml
+```typescript
+const result = tf.tidy(() => {
+  const input = tf.tensor2d(audioData, [1, INPUT_SAMPLES]);
+  const prediction = model.predict(input) as tf.Tensor;
+  return prediction.dataSync(); // Extract before tidy disposes
+});
 ```
 
-### 测试工作流
+### Audio Resampling (Critical for Model Accuracy)
+
+Model expects 16kHz but browsers default to 44.1kHz/48kHz:
+
+```typescript
+// Linear interpolation resampling in useVowelDetectorML
+const resampleRatio = actualSampleRate / TARGET_SAMPLE_RATE;
+for (let i = 0; i < targetLength; i++) {
+  const sourcePos = i * resampleRatio;
+  const intPart = Math.floor(sourcePos);
+  const fracPart = sourcePos - intPart;
+  // Interpolate between samples
+}
 ```
-1. 启动调试页面
-2. 点击 "启动监听"
-3. 对麦克风发音 (A, E, I, O, U)
-4. 查看实时检测结果和性能指标
-5. 检查历史记录和统计数据
+
+**Do not skip resampling** - direct 44.1kHz input causes 70% accuracy drop.
+
+### Stage System
+
+Stages defined in [src/config/stages.ts](src/config/stages.ts):
+
+- Stage 1 (初醒): 0 points, 60°/s rotation
+- Stage 2 (躁动): 500 points, particles enabled
+- Stage 3 (狂热): 2000 points, chromatic aberration
+- Stage 4 (超度): 5000 points, intense effects
+- Stage 5 (神猫): 10000 points, maximum chaos
+
+Each stage has `StageVisualConfig` with:
+- `cat.rotationSpeed`: Angular velocity
+- `background.particles`: Count, speed, colors
+- `screenEffects`: shake, vignette, chromatic
+
+Calculate stage: `calculateStage(score)` - uses binary search over thresholds.
+
+### Vowel Sequences
+
+Presets in [src/config/vowels.ts](src/config/vowels.ts):
+
+```typescript
+standard: ['U', 'I', 'I', 'A', 'I', 'O', 'U', 'I', 'I', 'I', 'A', 'I']
+simple:   ['O', 'I', 'I', 'A', 'I', 'O', 'I', 'I', 'I', 'A', 'I']
 ```
 
-### 性能预期
-| 指标 | 目标 | 可接受范围 |
-|------|------|----------|
-| 推理延迟 | 50-100ms | < 150ms |
-| 置信度 | > 80% | > 50% |
-| 准确率 | 92% | > 85% |
-| 内存占用 | < 50MB | < 100MB |
+Game validates detected vowels against current sequence position. Match = score + advance, mismatch = consecutive error counter.
 
----
+## File Organization
 
-## 🏗️ 项目结构
-
-### 关键文件
 ```
 src/
-├── composables/
-│   ├── useVowelDetectorML.ts      (378 行) - ML 检测器实现
-│   ├── VOWEL_DETECTOR_ML.md       - API 文档
-│   └── useVowelDetector.ts        - 原共振峰检测器
-│
-├── components/
-│   └── VowelDetectorMLDemo.vue    - 简单演示
-│
-├── views/
-│   └── DebugMLDetector.vue        (800+ 行) - 完整调试页面
-│
+├── composables/          # Business logic (Vue 3 Composition API)
+│   ├── useVowelDetectorML.ts    # ⭐ CNN detector (451 lines)
+│   ├── useVowelDetector.ts       # Legacy formant detector
+│   └── useGameState.ts           # Game state machine (484 lines)
+├── components/           # Reusable Vue components
+├── views/               # Route-level pages
+│   ├── DebugMLDetector.vue      # ⭐ Full ML testing UI (800+ lines)
+│   ├── DebugView.vue             # Legacy debug (formant)
+│   └── AudioAnalyzer.vue         # Spectrogram visualizer
 ├── types/
-│   └── game.ts                    - 类型定义
-│
-└── router/
-    └── index.ts                   - 路由配置
+│   └── game.ts          # ⭐ All TypeScript interfaces (224 lines)
+├── config/
+│   ├── stages.ts        # Stage thresholds & visual configs (247 lines)
+│   └── vowels.ts        # Sequence presets & formant ranges (237 lines)
+└── router/index.ts      # Vue Router config
 
-public/models/vowel/               - 模型部署位置
+public/models/vowel/
+├── model.json           # TF.js model architecture (37KB)
+└── group1-shard1of1.bin # uint8 quantized weights (69KB)
 ```
 
-### 路由配置
+## Development Workflows
+
+### Testing ML Detector
+
+1. `npm run dev` → visit `/debug-ml`
+2. Click "启动监听" (Start Listening)
+3. Grant microphone permission
+4. Speak vowels (A/E/I/O/U) clearly
+5. Monitor: confidence (target >80%), latency (<100ms), volume (>-40dB)
+
+**Debugging checklist**:
+- Model 404? Check `public/models/vowel/` files exist
+- No detection? Verify volume bar shows >-40dB
+- Low confidence? Check for background noise or speak closer to mic
+- High latency? Check WebGL backend: `tf.backend() === 'webgl'`
+
+### Adding New Routes
+
+Routes lazy-load by default (code splitting):
+
 ```typescript
 // src/router/index.ts
 {
-  path: '/debug-ml',
-  name: 'debug-ml',
-  component: () => import('@/views/DebugMLDetector.vue'),
-  meta: { title: '元音识别调试-ML' }
+  path: '/new-feature',
+  name: 'new-feature',
+  component: () => import('@/views/NewFeature.vue'),
+  meta: { title: 'Display Title' }
 }
 ```
 
----
+Title updates via `router.beforeEach` hook appending " | OIIAIOIIIAI".
 
-## 🔧 常见任务
+### Type Safety
 
-### 集成到游戏组件
+All game-related types in [src/types/game.ts](src/types/game.ts). When adding features:
+
+1. Define interfaces in `game.ts`
+2. Export from composable return types
+3. Use strict typing - avoid `any`
+
+Example:
+
 ```typescript
-// GamePlay.vue 中
-import { useVowelDetectorML } from '@/composables/useVowelDetectorML';
-
-const detector = useVowelDetectorML();
-detector.onVowelDetected((vowel, result) => {
-  // 游戏逻辑处理
-});
-
-onMounted(async () => {
-  await detector.start();
-});
-
-onUnmounted(() => {
-  detector.stop();
-  detector.reset();
-});
-```
-
-### 调试问题
-1. **模型加载失败**: 检查 `public/models/vowel/` 文件是否存在
-2. **麦克风拒绝**: 检查浏览器权限，允许访问麦克风
-3. **无声音检测**: 检查音量 > -40dB，减少背景噪音
-4. **低置信度**: 改进发音或测试不同环境
-
-### 优化配置
-```typescript
-// 提高置信度要求
-if (result.confidence > 0.7) {
-  // 处理检测
+// game.ts
+export interface NewFeatureConfig {
+  threshold: number;
+  enabled: boolean;
 }
 
-// 多帧投票 (提高鲁棒性)
-const predictions = new Map();
-for (const result of recentResults) {
-  predictions.set(result.vowel, (predictions.get(result.vowel) ?? 0) + 1);
+// composable
+export interface UseNewFeatureReturn {
+  config: Ref<NewFeatureConfig>;
+  update: (config: Partial<NewFeatureConfig>) => void;
 }
-const vowel = [...predictions.entries()].sort((a, b) => b[1] - a[1])[0][0];
 ```
 
----
+## Common Issues
 
-## 📊 编译状态
+**TypeScript Error: Cannot find module '@/...'**  
+→ Check `vite.config.ts` alias: `'@': fileURLToPath(new URL('./src', import.meta.url))`
 
-```
-✅ useVowelDetectorML.ts      无错误
-✅ VowelDetectorMLDemo.vue    无错误
-✅ DebugMLDetector.vue        无错误
-✅ game.ts                    无错误
-✅ 类型检查                    通过
-✅ 依赖完整                    已安装
-```
+**Audio Not Working in Production**  
+→ Requires HTTPS or localhost (getUserMedia constraint)  
+→ Vite dev server has auto-SSL via `@vitejs/plugin-basic-ssl`
 
-**编译命令**:
-```bash
-npm run build        # 生产构建
-npm run dev          # 开发服务
-npx tsc --noEmit    # 类型检查
-```
+**Model Loading Slow**  
+→ Model is lazy-loaded on first detector init  
+→ Preload: `<link rel="preload" href="/models/vowel/model.json">`
 
----
+**Memory Leak During Development**  
+→ Hot reload doesn't cleanup TensorFlow  
+→ Hard refresh browser tab or restart dev server
 
-## 📚 文档资源
+## Performance Targets
 
-| 文档 | 用途 |
-|------|------|
-| `src/composables/VOWEL_DETECTOR_ML.md` | API 详细文档 |
-| `INTEGRATION_SUMMARY.md` | 集成概要 |
-| `DEBUG_QUICK_START.md` | 快速启动 |
-| `RESOURCES_INDEX.md` | 资源索引 |
+| Metric | Target | Acceptable |
+|--------|--------|------------|
+| Inference latency | 50-100ms | <150ms |
+| Detection confidence | >80% | >50% |
+| Model accuracy | 92% | >85% |
+| Memory usage | <50MB | <100MB |
 
----
+## Model Training Status
 
-## 🎓 技术架构
+### Current Model (TIMIT-based) - ⚠️ Deprecated
 
-### 音频处理流程
-```
-麦克风输入 (16kHz)
-    ↓
-ScriptProcessorNode 采集
-    ↓
-3360 样本缓冲
-    ↓
-TensorFlow.js 推理 (CNN)
-    ↓
-6 类概率分布
-    ↓
-置信度过滤 + 事件回调
-```
+The existing model in `public/models/vowel/` was trained on TIMIT dataset. **Problem**: TIMIT vowels are surrounded by consonants, causing coarticulation effects that don't match this game's pure isolated vowel input. Result: 92% validation accuracy but poor real-world performance in `/debug-ml`.
 
-### 模型规格
-- **架构**: CNN (3 个卷积层 + 1 个全连接层)
-- **参数**: 72,902 个
-- **输入**: (1, 3360) - 单通道音频
-- **输出**: (1, 6) - 6 类 softmax
-- **优化**: uint8 量化
+### Planned Approach: Hillenbrand Vowel Dataset
 
-### 性能特性
-- **推理延迟**: 50-100ms (CPU)
-- **内存占用**: < 50MB
-- **浏览器支持**: 所有现代浏览器
-- **GPU 加速**: WebGL 后端支持
+New training strategy (to be implemented):
+- **Dataset**: Hillenbrand Vowel Dataset (isolated sustained vowels)
+- **Data augmentation**: Concatenate vowels in various sequences + add noise layers
+- **Rationale**: Better matches actual gameplay where users produce sustained vowel sounds
 
----
+### Notebook Reference
 
-## 🔄 下一步建议
+The old notebook [model/Vowel_CNN_Training.ipynb](model/Vowel_CNN_Training.ipynb) contains reusable patterns:
+- Kaggle API token setup via environment variables
+- Dataset download and caching logic
+- Model export to TensorFlow.js format
 
-### 立即
-1. ✅ 访问 `/debug-ml` 进行实际测试
-2. → 验证检测准确率 (目标 > 80%)
-3. → 记录性能数据
+When creating the new training notebook, preserve these infrastructure patterns.
 
-### 短期 (1-2 周)
-4. 集成到主游戏组件
-5. A/B 对比测试 (CNN vs 共振峰)
-6. 用户体验优化
+## Documentation References
 
-### 中期 (1-3 个月)
-7. 收集实际使用数据
-8. 性能微调
-9. 本地化支持 (中文方言)
+- Full ML detector API: [src/composables/VOWEL_DETECTOR_ML.md](src/composables/VOWEL_DETECTOR_ML.md)
+- Quick start guide: [DEBUG_QUICK_START.md](DEBUG_QUICK_START.md)
+- Game design document: [story.md](story.md) - full gameplay mechanics, scoring, visual stages
 
----
+## Project Context
 
-## ⚠️ 注意事项
+This is an interactive audio game where users sing the vowel sequence "OIIAIOIIIAI" (mimicking a viral spinning cat meme). 
 
-### 环境限制
-- 模型需要网络下载或本地部署
-- 麦克风访问需要用户授权
-- HTTPS 环境或 localhost 正常工作
+**Current status**: Model tuning phase. The debug views (`/debug-ml`, `/analyzer`) are functional, but game UI views are pending until the vowel detection model performs reliably on real microphone input.
 
-### 已知限制
-- 模型基于英文 TIMIT 数据
-- 强噪音环境准确率下降 (85-90%)
-- 中文方言支持有限
+**Blocked on**: Training a new model with Hillenbrand dataset that handles isolated vowel sounds better than the TIMIT-trained model.
 
-### 最佳实践
-- 使用 Web Audio API 的 echoCancellation
-- 定期更新模型权重
-- 监控内存使用情况
-- 收集用户反馈数据
-
----
-
-## 🆘 问题排查
-
-### 编译错误
-```bash
-# 清理构建缓存
-rm -rf node_modules .nuxt dist
-npm install
-npm run build
-```
-
-### 运行时错误
-```typescript
-// 检查模型路径
-console.log('模型路径:', '/models/vowel/model.json');
-
-// 检查 TF.js 版本
-console.log('TF.js 版本:', tf.version);
-
-// 检查浏览器支持
-console.log('WebGL 支持:', tf.backend() === 'webgl');
-```
-
-### 性能优化
-1. 使用 tf.tidy() 避免内存泄漏
-2. 批量处理多个推理
-3. 启用 WebGL 后端加速
-4. 优化音频输入采样率
-
----
-
-## 📞 联系信息
-
-**项目维护者**: [Your Name]  
-**最后更新**: 2026-02-01  
-**版本**: v1.0  
-**状态**: ✅ 生产就绪
-
----
-
-## 📝 更新日志
-
-### v1.0 (2026-02-01)
-- ✅ ML 检测器完全集成
-- ✅ 调试页面完成
-- ✅ 所有编译错误修复
-- ✅ 文档完善
-- ✅ 生产就绪
-
----
-
-## 🎯 快速导航
-
-| 需要 | 查看 |
-|------|------|
-| 启动调试页面 | `/debug-ml` 路由 |
-| API 使用方式 | `src/composables/VOWEL_DETECTOR_ML.md` |
-| 集成示例 | `src/components/VowelDetectorMLDemo.vue` |
-| 类型定义 | `src/types/game.ts` |
-| 模型信息 | 本文档的"模型与依赖"部分 |
-| 故障排查 | 本文档的"问题排查"部分 |
-
----
-
-**准备就绪！** 🚀 可以开始使用 ML 检测器了。
+**After model is ready**: Implement game views per [story.md](story.md) design - scoring system, 5-stage visual progression, share/recording features, leaderboard.
