@@ -1,3 +1,5 @@
+import type { Ref } from 'vue';
+
 // ==================== 元音检测相关类型 ====================
 
 /** 
@@ -33,6 +35,12 @@ export interface VowelDetectionResult {
   timestamp: number;
 }
 
+/** 元音检测调试数据 */
+export interface VowelDetectorDebugData {
+  frequencyData: Float32Array | null;
+  timeData: Float32Array | null;
+}
+
 /** 元音共振峰范围配置 */
 export interface VowelFormantRange {
   f1: [number, number];  // [min, max] Hz
@@ -58,6 +66,32 @@ export interface VowelDetectorConfig {
   vowelFormants?: VowelFormantConfig;
   /** TensorFlow.js 模型路径 (ML 检测器) */
   modelPath?: string;
+}
+
+/** 元音检测器 Hook 返回类型（Formant/ML 共用） */
+export interface VowelDetectorHookReturn {
+  /** 当前检测结果（响应式） */
+  currentResult: Ref<VowelDetectionResult | null>;
+  /** 当前确认的元音（经过稳定性过滤） */
+  confirmedVowel: Ref<Vowel | null>;
+  /** 检测器状态 */
+  isListening: Ref<boolean>;
+  isInitialized: Ref<boolean>;
+  error: Ref<string | null>;
+  /** 最新的各类别概率分布（ML 模型可用） */
+  latestProbabilities: Ref<number[] | null>;
+  /** 控制方法 */
+  start: () => Promise<void>;
+  stop: () => void;
+  reset: () => void;
+  /** 事件回调注册 */
+  onVowelDetected: (callback: VowelDetectedCallback) => void;
+  onSilence: (callback: SilenceCallback) => void;
+  onError: (callback: ErrorCallback) => void;
+  /** 调试用：原始音频数据 */
+  debugData: Ref<VowelDetectorDebugData>;
+  /** 诊断方法 */
+  getAudioDiagnostics: () => Record<string, unknown>;
 }
 
 // ==================== 游戏状态相关类型 ====================

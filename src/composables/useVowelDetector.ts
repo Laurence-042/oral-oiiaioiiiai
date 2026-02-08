@@ -1,13 +1,14 @@
-import { ref, shallowRef, onUnmounted, type Ref, type ShallowRef } from 'vue';
+import { ref, shallowRef, onUnmounted } from 'vue';
 import type {
   Vowel,
   VowelDetectorConfig,
   VowelDetectionResult,
   DetectionStatus,
-  VowelFormantConfig,
   VowelDetectedCallback,
   SilenceCallback,
-  ErrorCallback
+  ErrorCallback,
+  VowelDetectorHookReturn,
+  VowelDetectorDebugData
 } from '@/types/game';
 import {
   DEFAULT_VOWEL_DETECTOR_CONFIG,
@@ -16,33 +17,6 @@ import {
   binToFrequency,
   FREQUENCY_ANALYSIS
 } from '@/config/vowels';
-
-/**
- * useVowelDetector Hook 返回类型
- */
-export interface UseVowelDetectorReturn {
-  /** 当前检测结果（响应式） */
-  currentResult: Ref<VowelDetectionResult | null>;
-  /** 当前确认的元音（经过稳定性过滤） */
-  confirmedVowel: Ref<Vowel | null>;
-  /** 检测器状态 */
-  isListening: Ref<boolean>;
-  isInitialized: Ref<boolean>;
-  error: Ref<string | null>;
-  /** 控制方法 */
-  start: () => Promise<void>;
-  stop: () => void;
-  reset: () => void;
-  /** 事件回调注册 */
-  onVowelDetected: (callback: VowelDetectedCallback) => void;
-  onSilence: (callback: SilenceCallback) => void;
-  onError: (callback: ErrorCallback) => void;
-  /** 调试用：原始音频数据 */
-  debugData: ShallowRef<{
-    frequencyData: Float32Array | null;
-    timeData: Float32Array | null;
-  }>;
-}
 
 /**
  * 元音检测器 Composable
@@ -60,9 +34,9 @@ export interface UseVowelDetectorReturn {
  * await start();
  * ```
  */
-export function useVowelDetector(config?: VowelDetectorConfig): UseVowelDetectorReturn {
+export function useVowelDetector(config?: VowelDetectorConfig): VowelDetectorHookReturn {
   // ==================== 配置合并 ====================
-  const cfg: Required<VowelDetectorConfig> = {
+  const cfg: Required<Omit<VowelDetectorConfig, 'modelPath'>> & { modelPath?: string } = {
     ...DEFAULT_VOWEL_DETECTOR_CONFIG,
     ...config,
     vowelFormants: {
@@ -77,11 +51,9 @@ export function useVowelDetector(config?: VowelDetectorConfig): UseVowelDetector
   const isListening = ref(false);
   const isInitialized = ref(false);
   const error = ref<string | null>(null);
+  const latestProbabilities = ref<number[] | null>(null);
   
-  const debugData = shallowRef<{
-    frequencyData: Float32Array | null;
-    timeData: Float32Array | null;
-  }>({
+  const debugData = shallowRef<VowelDetectorDebugData>({
     frequencyData: null,
     timeData: null
   });
@@ -127,6 +99,19 @@ export function useVowelDetector(config?: VowelDetectorConfig): UseVowelDetector
 
   function emitError(err: Error): void {
     errorCallbacks.forEach(cb => cb(err));
+  }
+
+  function getAudioDiagnostics(): Record<string, unknown> {
+    return {
+      detectorType: 'formant',
+      sampleRate: cfg.sampleRate,
+      fftSize: cfg.fftSize,
+      frameTime: cfg.frameTime,
+      silenceThreshold: cfg.silenceThreshold,
+      audioContextState: audioContext?.state,
+      isInitialized: isInitialized.value,
+      isListening: isListening.value
+    };
   }
 
   // ==================== 音频初始化 ====================
@@ -358,7 +343,7 @@ export function useVowelDetector(config?: VowelDetectorConfig): UseVowelDetector
 
       // 处理元音检测结果
       if (status === 'detected' && vowel !== null) {
-        handleVowelDetected(vowel, result, now);
+        handleVowelDetected(vowel, result);
       }
       // 注意：不在 ambiguous/noise 时设置 hadGapSinceLastEmit
       // 只有真正的静音才算间隔
@@ -373,7 +358,7 @@ export function useVowelDetector(config?: VowelDetectorConfig): UseVowelDetector
    * 1. 元音发生变化（O→I, I→A 等）
    * 2. 经过了静音间隔后的同一元音
    */
-  function handleVowelDetected(vowel: Vowel, result: VowelDetectionResult, now: number): void {
+  function handleVowelDetected(vowel: Vowel, result: VowelDetectionResult): void {
     const isNewVowel = vowel !== lastConfirmedVowel;
     
     // 触发条件：元音变化 或 经过了静音间隔
@@ -476,12 +461,14 @@ export function useVowelDetector(config?: VowelDetectorConfig): UseVowelDetector
     isListening,
     isInitialized,
     error,
+    latestProbabilities,
     start,
     stop,
     reset,
     onVowelDetected,
     onSilence,
     onError,
-    debugData
+    debugData,
+    getAudioDiagnostics
   };
 }

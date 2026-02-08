@@ -101,7 +101,7 @@ export function getSequenceHintText(): string {
  * | O    | 400-600 Hz  | 800-1200 Hz   | F1 中，F2 低 (后中) |
  */
 
-//这是标准元音共振峰范围配置，但oiiaioiiiai游戏中需要做调整以提升识别率
+//这是标准元音共振峰范围配置，但oiiaioiiiai游戏中也许需要做调整以提升识别率
 export const DEFAULT_VOWEL_FORMANTS: VowelFormantConfig = {
   U: {
     f1: [300, 450],
@@ -122,38 +122,17 @@ export const DEFAULT_VOWEL_FORMANTS: VowelFormantConfig = {
   O: {
     f1: [400, 600],
     f2: [800, 1200]
+  },
+  silence: {
+    f1: [0, 0],
+    f2: [0, 0]
   }
 };
-
-/**
-export const DEFAULT_VOWEL_FORMANTS: VowelFormantConfig = {
-  U: {
-    f1: [230, 330],
-    f2: [718, 1500]
-  },
-  I: {
-    f1: [200, 400],
-    f2: [2000, 3000]
-  },
-  E: {
-    f1: [400, 600],
-    f2: [1800, 2400]
-  },
-  A: {
-    f1: [700, 1000],
-    f2: [1400, 2000]
-  },
-  O: {
-    f1: [400, 800],
-    f2: [800, 1200]
-  }
-};
- */
 
 /**
  * 元音检测器默认配置
  */
-export const DEFAULT_VOWEL_DETECTOR_CONFIG: Required<VowelDetectorConfig> = {
+export const DEFAULT_VOWEL_DETECTOR_CONFIG: Omit<Required<VowelDetectorConfig>, 'modelPath'> = {
   /** FFT 大小，影响频率分辨率 */
   fftSize: 2048,
   /** 采样率 */

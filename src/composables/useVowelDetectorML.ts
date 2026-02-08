@@ -1,4 +1,4 @@
-import { ref, onUnmounted, type Ref } from 'vue';
+import { ref, shallowRef, onUnmounted } from 'vue';
 import * as tf from '@tensorflow/tfjs';
 import type {
   Vowel,
@@ -7,34 +7,11 @@ import type {
   DetectionStatus,
   VowelDetectedCallback,
   SilenceCallback,
-  ErrorCallback
+  ErrorCallback,
+  VowelDetectorHookReturn,
+  VowelDetectorDebugData
 } from '@/types/game';
-
-/**
- * TensorFlow.js 基础的元音检测器返回类型
- */
-export interface UseVowelDetectorMLReturn {
-  /** 当前检测结果（响应式） */
-  currentResult: Ref<VowelDetectionResult | null>;
-  /** 当前确认的元音（经过稳定性过滤） */
-  confirmedVowel: Ref<Vowel | null>;
-  /** 检测器状态 */
-  isListening: Ref<boolean>;
-  isInitialized: Ref<boolean>;
-  error: Ref<string | null>;
-  /** 最新的各类别概率分布 [A, E, I, O, U, silence] */
-  latestProbabilities: Ref<number[] | null>;
-  /** 控制方法 */
-  start: () => Promise<void>;
-  stop: () => void;
-  reset: () => void;
-  /** 事件回调注册 */
-  onVowelDetected: (callback: VowelDetectedCallback) => void;
-  onSilence: (callback: SilenceCallback) => void;
-  onError: (callback: ErrorCallback) => void;
-  /** 诊断方法 */
-  getAudioDiagnostics: () => Record<string, any>;
-}
+import { DEFAULT_VOWEL_DETECTOR_CONFIG, DEFAULT_VOWEL_FORMANTS } from '@/config/vowels';
 
 const VOWEL_CLASSES = ['A', 'E', 'I', 'O', 'U', 'silence'] as const;
 const INPUT_SAMPLES = 3360; // 210ms @ 16kHz
@@ -57,7 +34,17 @@ const TARGET_SAMPLE_RATE = 16000; // 训练模型使用的采样率
  * await start();
  * ```
  */
-export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetectorMLReturn {
+export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorHookReturn {
+  // ==================== 配置合并 ====================
+  const cfg: Required<Omit<VowelDetectorConfig, 'modelPath'>> & { modelPath?: string } = {
+    ...DEFAULT_VOWEL_DETECTOR_CONFIG,
+    ...config,
+    vowelFormants: {
+      ...DEFAULT_VOWEL_FORMANTS,
+      ...config?.vowelFormants
+    }
+  };
+
   // ==================== 响应式状态 ====================
   const currentResult = ref<VowelDetectionResult | null>(null);
   const confirmedVowel = ref<Vowel | null>(null);
@@ -65,15 +52,17 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
   const isInitialized = ref(false);
   const error = ref<string | null>(null);
   const latestProbabilities = ref<number[] | null>(null);  // 最新的各类别概率
+  const debugData = shallowRef<VowelDetectorDebugData>({
+    frequencyData: null,
+    timeData: null
+  });
 
   // ==================== 内部状态 ====================
   let audioContext: AudioContext | null = null;
   let mediaStream: MediaStream | null = null;
   let model: tf.GraphModel | null = null;
   let audioBuffer: Float32Array | null = null;
-  let resampleBuffer: Float32Array | null = null;
   let bufferIndex = 0;
-  let resampleIndex = 0;
   let animationFrameId: number | null = null;
   let lastAnalysisTime = 0;
   let actualSampleRate = 44100; // 实际采样率（会在初始化时检测）
@@ -118,7 +107,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
   // ==================== 模型初始化 ====================
   async function loadModel(): Promise<void> {
     try {
-      const modelPath = config?.modelPath || '/models/vowel/model.json';
+      const modelPath = config?.modelPath ?? '/models/vowel/model.json';
       model = (await tf.loadGraphModel(modelPath)) as tf.GraphModel;
       console.log('✅ 元音识别模型已加载');
     } catch (err) {
@@ -155,13 +144,9 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
       // 计算重采样后的缓冲区大小
       // 如果实际采样率是 44100Hz，重采样到 16000Hz 后，
       // 每个 4096 样本的音频块会变成 ~1495 样本
-      const maxResampledSize = Math.ceil(4096 * resampleRatio) * 2;
-      resampleBuffer = new Float32Array(maxResampledSize);
-      
       // 创建音频缓冲区（用于存储重采样后的数据）
       audioBuffer = new Float32Array(INPUT_SAMPLES);
       bufferIndex = 0;
-      resampleIndex = 0;
 
       // 创建 ScriptProcessorNode 用于收集音频数据
       // 使用 4096 样本的缓冲大小（标准值）
@@ -215,9 +200,10 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
     const now = performance.now();
     // ⚠️ 关键：使用目标采样率计算帧时间（不是实际采样率）
     const frameTime = (INPUT_SAMPLES / TARGET_SAMPLE_RATE) * 1000; // ms 为单位的帧时间
+    const analysisInterval = Math.max(cfg.frameTime, frameTime * 0.5);
     
     // 控制分析频率
-    if (now - lastAnalysisTime < frameTime * 0.5) {
+    if (now - lastAnalysisTime < analysisInterval) {
       animationFrameId = requestAnimationFrame(analyzeAudio);
       return;
     }
@@ -235,16 +221,17 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
 
       // 计算音量
       const volume = calculateVolume(audioData);
+      debugData.value = { frequencyData: null, timeData: audioData };
 
       // 判断是否静音
-      if (volume < -40) {
+      if (volume < cfg.silenceThreshold) {
         handleSilence(now, volume);
       } else {
         // 重置静音计时
         silenceStartTime = null;
 
         // 转换为 Tensor 并进行推理
-        const input = tf.tensor2d(Array.from(audioData), [1, INPUT_SAMPLES]);
+        const input = tf.tensor2d(audioData, [1, INPUT_SAMPLES]);
         const predictions = model!.predict(input) as tf.Tensor;
         const probabilities = await predictions.data();
         
@@ -285,7 +272,6 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
         // 清理
         input.dispose();
         predictions.dispose();
-        tf.dispose(probabilities);
       }
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
@@ -398,13 +384,12 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
     }
 
     audioBuffer = null;
-    resampleBuffer = null;
     bufferIndex = 0;
-    resampleIndex = 0;
     
     isInitialized.value = false;
     currentResult.value = null;
     error.value = null;
+    latestProbabilities.value = null;
   }
 
   // ==================== 诊断和调试 ====================
@@ -414,6 +399,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
    */
   function getAudioDiagnostics() {
     return {
+      detectorType: 'ml',
       targetSampleRate: TARGET_SAMPLE_RATE,
       actualSampleRate: actualSampleRate,
       resampleRatio: resampleRatio,
@@ -421,6 +407,8 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
       expectedDurationMs: (INPUT_SAMPLES / TARGET_SAMPLE_RATE) * 1000,
       actualDurationMs: (INPUT_SAMPLES / actualSampleRate) * 1000,
       audioContextState: audioContext?.state,
+      silenceThreshold: cfg.silenceThreshold,
+      modelPath: config?.modelPath ?? '/models/vowel/model.json',
       isInitialized: isInitialized.value,
       isListening: isListening.value
     };
@@ -445,6 +433,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): UseVowelDetect
     onVowelDetected,
     onSilence,
     onError,
+    debugData,
     getAudioDiagnostics
   };
 }
