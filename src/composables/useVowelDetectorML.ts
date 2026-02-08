@@ -16,6 +16,9 @@ import { DEFAULT_VOWEL_DETECTOR_CONFIG, DEFAULT_VOWEL_FORMANTS } from '@/config/
 const VOWEL_CLASSES = ['A', 'E', 'I', 'O', 'U', 'silence'] as const;
 const INPUT_SAMPLES = 3360; // 210ms @ 16kHz
 const TARGET_SAMPLE_RATE = 16000; // 训练模型使用的采样率
+const HYSTERESIS_HIGH = 0.6;
+const HYSTERESIS_LOW = 0.45;
+const SWITCH_MARGIN = 0.08;
 
 /**
  * TensorFlow.js 元音检测器 Composable
@@ -71,6 +74,8 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
   // 元音检测状态
   let lastConfirmedVowel: Vowel | null = null;
   let hadGapSinceLastEmit = true;
+  let stableVowel: Vowel | null = null;
+  let stableProb = 0;
   
   // 静音检测状态
   let silenceStartTime: number | null = null;
@@ -248,11 +253,37 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
           }
         }
 
-        const vowel = VOWEL_CLASSES[maxIdx] as Vowel;
-        const confidence = Math.min(1, Math.max(0, maxProb)); // 归一化到 [0, 1]
+        const candidate = VOWEL_CLASSES[maxIdx] as Vowel;
+        const candidateProb = Math.min(1, Math.max(0, maxProb));
+
+        // Schmitt 触发式滞回：减少元音抖动
+        if (stableVowel === null) {
+          if (candidateProb >= HYSTERESIS_HIGH) {
+            stableVowel = candidate;
+            stableProb = candidateProb;
+          }
+        } else if (candidate === stableVowel) {
+          stableProb = candidateProb;
+          if (candidateProb < HYSTERESIS_LOW) {
+            stableVowel = null;
+            stableProb = 0;
+          }
+        } else {
+          const canSwitch = candidateProb >= HYSTERESIS_HIGH &&
+            candidateProb >= stableProb + SWITCH_MARGIN;
+          if (canSwitch) {
+            stableVowel = candidate;
+            stableProb = candidateProb;
+          }
+        }
+
+        const vowel = stableVowel;
+        const confidence = stableVowel ? stableProb : candidateProb;
 
         // 确定检测状态
-        const status: DetectionStatus = confidence > 0.5 ? 'detected' : 'ambiguous';
+        const status: DetectionStatus =
+          vowel !== null && confidence > 0.5 ? 'detected' :
+          vowel !== null ? 'ambiguous' : 'noise';
 
         const result: VowelDetectionResult = {
           vowel: status === 'detected' ? vowel : null,
@@ -265,7 +296,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
         currentResult.value = result;
 
         // 处理元音检测结果
-        if (status === 'detected') {
+        if (status === 'detected' && vowel !== null) {
           handleVowelDetected(vowel, result);
         }
 

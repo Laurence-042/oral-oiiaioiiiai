@@ -83,6 +83,30 @@ export function getSequenceHintText(): string {
   return getCurrentPreset().hints.join('-');
 }
 
+// ==================== 模糊元音配置 ====================
+
+/**
+ * 模糊元音映射
+ * 允许发音相近时视为正确：
+ * - 预期 U ↔ O 可互认
+ * - 预期 I ↔ E 可互认
+ */
+export const VOWEL_FUZZY_MAP: Record<Vowel, Vowel[]> = {
+  U: ['U', 'O'],
+  O: ['O', 'U'],
+  I: ['I', 'E'],
+  E: ['E', 'I'],
+  A: ['A'],
+  silence: ['silence']
+};
+
+/**
+ * 判断检测元音是否与预期元音模糊匹配
+ */
+export function isFuzzyMatch(expected: Vowel, detected: Vowel): boolean {
+  return VOWEL_FUZZY_MAP[expected]?.includes(detected) ?? false;
+}
+
 // ==================== 元音共振峰配置 ====================
 
 /**

@@ -20,7 +20,7 @@ import {
   TIMING_CONFIG,
   SCORE_CONFIG
 } from '@/config/stages';
-import { getTargetSequence } from '@/config/vowels';
+import { getTargetSequence, isFuzzyMatch } from '@/config/vowels';
 
 /**
  * useGameState Hook 返回类型
@@ -100,6 +100,7 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
   const cfg = {
     silenceTimeout: TIMING_CONFIG.SILENCE_TIMEOUT,
     maxConsecutiveErrors: TIMING_CONFIG.MAX_CONSECUTIVE_ERRORS,
+    errorDebounceMs: TIMING_CONFIG.ERROR_DEBOUNCE_MS,
     baseScore: SCORE_CONFIG.BASE_SCORE,
     perfectCycleBonus: SCORE_CONFIG.PERFECT_CYCLE_BONUS,
     speedBonusThreshold: TIMING_CONFIG.SPEED_BONUS_THRESHOLD,
@@ -137,6 +138,7 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
 
   // ==================== 内部状态 ====================
   let silenceCheckInterval: ReturnType<typeof setInterval> | null = null;
+  let lastErrorTime = 0;
 
   // ==================== 事件回调 ====================
   const stageChangeCallbacks: StageChangeCallback[] = [];
@@ -240,11 +242,12 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
       return;
     }
     
-    // 正常模式：检查序列
-    if (vowel === expectedVowel) {
+    // 正常模式：检查序列（允许模糊匹配）
+    const isMatch = vowel === expectedVowel || isFuzzyMatch(expectedVowel, vowel);
+    if (isMatch) {
       handleCorrectVowel(timeDelta, now);
     } else {
-      handleWrongVowel();
+      handleWrongVowel(now);
     }
   }
 
@@ -282,7 +285,11 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
   /**
    * 处理错误的元音
    */
-  function handleWrongVowel(): void {
+  function handleWrongVowel(now: number): void {
+    if (now - lastErrorTime < cfg.errorDebounceMs) {
+      return;
+    }
+    lastErrorTime = now;
     stats.value.consecutiveErrors++;
     
     // 自由模式禁用中断时不检查

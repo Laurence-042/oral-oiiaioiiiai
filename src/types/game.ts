@@ -171,6 +171,8 @@ export interface GameConfig {
   silenceTimeout?: number;
   /** 连续错误阈值，默认 3 */
   maxConsecutiveErrors?: number;
+  /** 错误计数防抖 (ms)，默认 250 */
+  errorDebounceMs?: number;
   /** 基础得分，默认 10 */
   baseScore?: number;
   /** 完美循环奖励，默认 50 */

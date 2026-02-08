@@ -216,6 +216,8 @@ export const TIMING_CONFIG = {
   SILENCE_TIMEOUT: 1500,
   /** 连续错误阈值 */
   MAX_CONSECUTIVE_ERRORS: 3,
+  /** 错误计数防抖 (ms) */
+  ERROR_DEBOUNCE_MS: 250,
   /** 速度加成阈值 (ms) */
   SPEED_BONUS_THRESHOLD: 300
 };
