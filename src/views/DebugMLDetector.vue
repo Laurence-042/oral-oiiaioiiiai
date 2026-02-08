@@ -69,8 +69,8 @@
         <!-- 状态 -->
         <div class="detection-item">
           <label>检测状态</label>
-          <div class="status-badge" :class="currentResult?.status">
-            {{ currentResult?.status || 'idle' }}
+          <div class="status-badge" :class="isSilenceState ? 'silence' : currentResult?.status">
+            {{ isSilenceState ? 'silence' : (currentResult?.status || 'idle') }}
           </div>
         </div>
       </div>
@@ -90,9 +90,20 @@
                 class="fill"
                 :style="{ width: `${prob * 100}%` }"
               ></div>
+              <!-- 峰值标记 -->
+              <div 
+                v-if="peakProbabilities[idx] > 0.01"
+                class="peak-marker"
+                :style="{ left: `${peakProbabilities[idx] * 100}%` }"
+                :title="`峰值: ${(peakProbabilities[idx] * 100).toFixed(1)}%`"
+              ></div>
             </div>
             <span class="value">{{ (prob * 100).toFixed(1) }}%</span>
           </div>
+        </div>
+        <div class="peak-legend">
+          <span class="peak-indicator"></span>
+          <span>当前发音区间峰值</span>
         </div>
       </div>
     </section>
@@ -364,7 +375,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from 'vue';
+import { ref, computed, onMounted, reactive, watch } from 'vue';
 import { useVowelDetectorML } from '@/composables/useVowelDetectorML';
 import type { Vowel } from '@/types/game';
 
@@ -401,6 +412,11 @@ const detectionHistory = ref<Array<{
   duration: number;
 }>>([]);
 const audioFileInput = ref<HTMLInputElement | null>(null);
+
+// ==================== 峰值追踪（两次 silence 之间） ====================
+const peakProbabilities = ref<number[]>([0, 0, 0, 0, 0, 0]); // 当前区间各类别的最大概率
+const lastPeakProbabilities = ref<number[]>([0, 0, 0, 0, 0, 0]); // 上一个完整区间的峰值（用于显示）
+const wasSilence = ref(true); // 上一帧是否为 silence
 
 // ==================== 离线分析状态 ====================
 const analysisState = ref({
@@ -468,6 +484,42 @@ const debugMemory = computed(() => {
 使用率: ${((perfMemory.usedJSHeapSize / perfMemory.jsHeapSizeLimit) * 100).toFixed(1)}%`;
 });
 
+// 统一的静音状态判断：只有明确检测到非静音元音时才算"非静音"
+const isSilenceState = computed(() => {
+  const result = currentResult.value;
+  if (!result) return true;
+  
+  // 有明确检测到非静音元音时（detected 且是 A/E/I/O/U），才不是静音状态
+  if (result.status === 'detected' && result.vowel && result.vowel !== 'silence') {
+    return false;
+  }
+  
+  // 其他情况都算静音（包括 ambiguous 和 detected silence）
+  return true;
+});
+
+// ==================== 峰值追踪 Watcher ====================
+// 直接监听 isSilenceState 的变化来控制峰值重置
+watch(isSilenceState, (isSilence, wasSilence) => {
+  // 从静音变为非静音时：重置峰值（新一轮发音开始）
+  if (!isSilence && wasSilence) {
+    lastPeakProbabilities.value = [...peakProbabilities.value];
+    peakProbabilities.value = [0, 0, 0, 0, 0, 0];
+  }
+});
+
+// 监听概率变化来更新峰值
+watch(latestProbabilities, (probs) => {
+  if (!probs) return;
+  
+  // 更新峰值
+  for (let i = 0; i < probs.length; i++) {
+    if (probs[i] > peakProbabilities.value[i]) {
+      peakProbabilities.value[i] = probs[i];
+    }
+  }
+});
+
 // ==================== 事件处理 ====================
 const handleStart = async () => {
   try {
@@ -496,6 +548,10 @@ const handleReset = () => {
   stats.latencyStats = { min: Infinity, max: -Infinity, avg: 0 };
   stats.confidenceStats = { min: 1, max: 0, avg: 0 };
   stats.volumeStats = { min: Infinity, max: -Infinity, avg: 0 };
+  // 重置峰值追踪
+  peakProbabilities.value = [0, 0, 0, 0, 0, 0];
+  lastPeakProbabilities.value = [0, 0, 0, 0, 0, 0];
+  wasSilence.value = true;
 };
 
 const toggleDebug = () => {
@@ -838,7 +894,6 @@ section h2 {
   font-size: 48px;
   font-weight: bold;
   color: #ccc;
-  transition: all 0.3s;
 }
 
 .vowel-box.active {
@@ -870,7 +925,6 @@ section h2 {
 .confidence-bar-large .fill {
   height: 100%;
   background: linear-gradient(90deg, #52c41a, #1890ff);
-  transition: width 0.3s;
 }
 
 .percentage {
@@ -903,7 +957,6 @@ section h2 {
 .volume-bar .fill {
   height: 100%;
   background: linear-gradient(90deg, #ff7a45, #ffa940);
-  transition: width 0.3s;
 }
 
 .status-badge {
@@ -967,19 +1020,50 @@ section h2 {
   height: 20px;
   background: #e8e8e8;
   border-radius: 4px;
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
 }
 
 .prob-bar .fill {
   height: 100%;
   background: linear-gradient(90deg, #667eea, #764ba2);
-  transition: width 0.3s;
+  border-radius: 4px;
+}
+
+.prob-bar .peak-marker {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 3px;
+  background: #ff4d4f;
+  border-radius: 2px;
+  transform: translateX(-50%);
+  box-shadow: 0 0 4px rgba(255, 77, 79, 0.5);
 }
 
 .prob-bar-container .value {
   font-size: 12px;
   color: #999;
   text-align: right;
+}
+
+.peak-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #e8e8e8;
+  font-size: 12px;
+  color: #666;
+}
+
+.peak-indicator {
+  width: 3px;
+  height: 16px;
+  background: #ff4d4f;
+  border-radius: 2px;
+  box-shadow: 0 0 4px rgba(255, 77, 79, 0.5);
 }
 
 /* 控制面板 */
@@ -1001,7 +1085,6 @@ section h2 {
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.3s;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1126,7 +1209,6 @@ section h2 {
   border-radius: 8px;
   padding: 40px;
   text-align: center;
-  transition: all 0.3s;
 }
 
 .upload-box:hover {
@@ -1277,7 +1359,6 @@ section h2 {
 .ratio-fill {
   height: 100%;
   background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-  transition: width 0.3s;
 }
 
 .ratio-value {
@@ -1341,7 +1422,6 @@ section h2 {
 .timeline-bar {
   flex: 1;
   min-width: 2px;
-  transition: all 0.2s;
 }
 
 .timeline-bar:hover {
@@ -1564,7 +1644,6 @@ section h2 {
   font-size: 13px;
   padding: 6px 12px;
   border-bottom: 2px solid transparent;
-  transition: all 0.3s;
 }
 
 .tab-btn.active {
