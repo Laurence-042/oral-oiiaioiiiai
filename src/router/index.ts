@@ -26,6 +26,12 @@ const router = createRouter({
       meta: { title: '音频分析工具' }
     },
     {
+      path: '/media-processor',
+      name: 'media-processor',
+      component: () => import('@/views/MediaProcessor.vue'),
+      meta: { title: '素材加工工具' }
+    },
+    {
       path: '/game',
       name: 'game',
       component: () => import('@/views/GameView.vue'),
