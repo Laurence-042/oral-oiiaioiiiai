@@ -139,6 +139,8 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
   // ==================== 内部状态 ====================
   let silenceCheckInterval: ReturnType<typeof setInterval> | null = null;
   let lastErrorTime = 0;
+  /** 玩家是否已发出第一个元音（在此之前不计静音超时） */
+  let hasFirstVowel = false;
 
   // ==================== 事件回调 ====================
   const stageChangeCallbacks: StageChangeCallback[] = [];
@@ -226,6 +228,9 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
    */
   function processVowel(vowel: Vowel): void {
     if (state.value !== 'playing') return;
+
+    // 标记玩家已开始发音（此后才启用静音超时）
+    hasFirstVowel = true;
     
     const now = Date.now();
     const timeDelta = stats.value.lastVowelTime > 0 
@@ -309,6 +314,9 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
    */
   function handleSilence(duration: number): void {
     if (state.value !== 'playing') return;
+
+    // 玩家尚未发出第一个元音前不计静音超时
+    if (!hasFirstVowel) return;
     
     // 自由模式禁用中断时不检查
     if (freeMode.value.enabled && freeMode.value.disableInterrupt) {
@@ -330,6 +338,7 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     // 重置统计（但保留自由模式设置）
     stats.value = createInitialStats();
     stats.value.startTime = Date.now();
+    hasFirstVowel = false;
     
     // 如果自由模式锁定了阶段，设置初始阶段
     if (freeMode.value.enabled && freeMode.value.lockedStage) {
@@ -387,6 +396,7 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     state.value = 'idle';
     stats.value = createInitialStats();
     snapshot.value = null;
+    hasFirstVowel = false;
     
     if (silenceCheckInterval) {
       clearInterval(silenceCheckInterval);
@@ -459,16 +469,10 @@ export function connectVowelDetectorToGameState(
   },
   gameState: {
     processVowel: (vowel: Vowel) => void;
-    interrupt: (reason: InterruptReason) => void;
+    handleSilence: (duration: number) => void;
     state: Ref<GameState>;
-    freeMode: Ref<FreeModeConfig>;
-  },
-  options?: {
-    silenceTimeout?: number;
   }
 ): void {
-  const silenceTimeout = options?.silenceTimeout ?? TIMING_CONFIG.SILENCE_TIMEOUT;
-
   // 连接元音检测
   vowelDetector.onVowelDetected((vowel) => {
     // 过滤掉 silence —— silence 由 onSilence 超时路径处理
@@ -478,17 +482,9 @@ export function connectVowelDetectorToGameState(
     gameState.processVowel(vowel);
   });
 
-  // 连接静音检测
+  // 连接静音检测 — 所有门控逻辑（hasFirstVowel、自由模式等）
+  // 统一由 handleSilence 内部处理
   vowelDetector.onSilence((duration) => {
-    if (gameState.state.value !== 'playing') return;
-    
-    // 自由模式禁用中断时不检查
-    if (gameState.freeMode.value.enabled && gameState.freeMode.value.disableInterrupt) {
-      return;
-    }
-    
-    if (duration >= silenceTimeout) {
-      gameState.interrupt('silence_timeout');
-    }
+    gameState.handleSilence(duration);
   });
 }
