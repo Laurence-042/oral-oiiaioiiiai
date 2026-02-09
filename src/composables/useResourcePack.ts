@@ -179,7 +179,7 @@ export function useResourcePack() {
   }
 
   /** 播放指定音节 (可叠加，返回用于停止的函数) */
-  function playSyllable(index: number): { stop: () => void; duration: number } | null {
+  function playSyllable(index: number, playbackRate: number = 1): { stop: () => void; duration: number } | null {
     const pack = loadedPack.value;
     if (!pack) return null;
 
@@ -191,6 +191,7 @@ export function useResourcePack() {
 
     const source = ctx.createBufferSource();
     source.buffer = syl.buffer;
+    source.playbackRate.value = playbackRate;
     source.connect(ctx.destination);
     source.start(0);
 

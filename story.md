@@ -321,3 +321,108 @@ interface StageConfig {
 - 声音数据仅本地处理，不上传服务器
 - 排行榜仅存储昵称和分数
 - 明确的麦克风权限请求提示
+
+---
+
+## 实现进度 Checklist
+
+> 最后更新：2026-02-09
+
+### 核心玩法
+
+- [x] 元音检测 — CNN ML 模型 (`useVowelDetectorML`)
+- [x] 元音检测 — FFT 共振峰后备 (`useVowelDetector`)
+- [x] 检测器切换 UI（CNN / MFCC）
+- [x] 序列校验 (oiiaioiiiai 循环)
+- [x] 模糊匹配 (U↔O, I↔E)
+- [x] 错误计数防抖 (`errorDebounceMs`)
+- [x] 首次发音前不计静音超时 (`hasFirstVowel` 门控)
+
+### 计分系统
+
+- [x] 基础分 +10
+- [x] 连击倍率 `1 + floor(combo/10) * 0.1`，max 3x
+- [x] 速度加成 (<300ms → +5)
+- [x] 完美循环奖励 +50
+- [x] 分数 / 连击 / 阶段 / 循环 UI 显示
+
+### 视觉阶段系统
+
+- [x] 5 阶段分数阈值 (0 / 500 / 2000 / 5000 / 10000)
+- [x] 阶段切换回调 (`onStageChange`)
+- [x] 猫旋转速度按阶段变化
+- [x] 猫缩放按阶段变化
+- [x] 5 阶段完整配置数据 (粒子/shake/vignette/chromatic/trail/背景)
+- [x] 背景渐变按阶段变化
+- [x] 粒子特效渲染 — *Canvas 2D 粒子系统*
+- [x] 屏幕抖动 (shake)
+- [x] 暗角 (vignette)
+- [x] 色差 (chromatic aberration) — *drop-shadow 偏移模拟*
+- [x] 残影/分身 (trail)
+- [x] Stage 5 彩虹漩涡 — *conic-gradient 背景*
+- [ ] 阶段 BGM — *字段已有，无音频加载/播放*
+- [x] SFX 变调 (`sfxPitch`) — *`playSyllable` 设置 `playbackRate`*
+
+### 中断与重来
+
+- [x] 静音超时 1.5s
+- [x] 连续 3 次错误中断
+- [x] 手动暂停
+- [x] 结算卡片（分数/连击/阶段/循环/时长）
+- [x] 猫咪"晕倒"动画 + 屏幕渐暗 — *CSS faint-fall 动画*
+- [x] 任意发声快速重来 — *中断后保持检测器运行，检测到元音自动 restart*
+
+### 资源包系统（story 外增强）
+
+- [x] `public/resources/` 资源包发现 (`index.json` + `manifest.json`)
+- [x] 音节加载与解码 (`AudioBuffer`)
+- [x] 帧图片加载（idle + animation frames）
+- [x] 音节播放（可叠加）
+- [x] 帧动画同步（rAF + EMA 速度平滑）
+- [x] 资源包选择器 UI
+- [x] 加载进度条
+
+### 自由模式
+
+- [x] `FreeModeConfig` 类型定义
+- [x] 锁定阶段逻辑
+- [x] 禁用中断逻辑
+- [x] 任意元音模式逻辑
+- [ ] 自由模式 UI 面板（设置按钮 + 参数滑块）
+- [ ] 自定义旋转速度覆盖 — *字段已有，GameView 未读取*
+- [ ] 自定义特效强度覆盖 — *字段已有，无渲染代码读取*
+- [ ] 静音阈值调节 UI
+
+### 分享系统
+
+- [x] `sharing` 状态机状态
+- [ ] 分享状态 UI 渲染
+- [ ] 截图生成（分数 + 二维码 + 文案）
+- [ ] 视频录制（MediaRecorder，最后 15-30s）
+- [ ] 排行榜前端 UI
+- [ ] 排行榜后端 (Cloudflare Workers KV)
+- [ ] 自定义 BGM 模式（上传 + BPM 检测）
+
+### 彩蛋系统
+
+- [ ] 惨叫/尖叫 → 土拨鼠
+- [ ] 打嗝/咳嗽 → 猫弹飞
+- [ ] 吹口哨 → 猫摇摆
+- [ ] 静默 10s → 猫睡觉
+- [ ] 连续错误 → 困惑表情
+
+### 成就系统
+
+- [ ] 成就类型定义 (`achievements.ts`)
+- [ ] 🏅 午夜猫叫 (00:00-06:00)
+- [ ] 🏅 完美主义者 (100 连击不出错)
+- [ ] 🏅 速度之猫 (<200ms 均间隔持续 30s)
+- [ ] 🏅 马拉松选手 (单局 >5min)
+- [ ] 🏅 社交达猫 (分享)
+
+### 其他
+
+- [x] 响应式布局（横屏 PC + 竖屏 Mobile）
+- [ ] 键盘演示模式（无麦克风时）
+- [ ] Web Worker 音频处理（当前主线程）
+- [ ] iOS Safari 兼容性适配

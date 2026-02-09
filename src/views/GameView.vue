@@ -47,6 +47,7 @@
             <button class="btn primary large" @click="handleRestart">🔄 再来一次</button>
             <button class="btn ghost" @click="handleBackToIdle">返回首页</button>
           </div>
+          <p class="voice-restart-hint">🎤 或直接发声重新开始</p>
         </div>
       </div>
     </Transition>
@@ -80,8 +81,14 @@
       </div>
     </header>
 
+    <!-- ==================== 特效层 ==================== -->
+    <!-- 粒子 Canvas -->
+    <canvas ref="particleCanvas" class="particle-layer"></canvas>
+    <!-- 暗角 -->
+    <div class="vignette-layer" :style="vignetteStyle"></div>
+
     <!-- ==================== 主区域 ==================== -->
-    <main class="game-main">
+    <main class="game-main" :style="mainStyle">
       <!-- 分数面板 -->
       <section class="score-strip">
         <div class="score-item">
@@ -103,8 +110,22 @@
       </section>
 
       <!-- 精灵动画区域 -->
-      <section class="sprite-area">
-        <div class="sprite-container" :style="spriteContainerStyle">
+      <section class="sprite-area" :style="spriteAreaStyle">
+        <!-- 残影层 -->
+        <img
+          v-for="(trail, ti) in trailFrames"
+          :key="'trail-' + ti"
+          :src="trail.src"
+          class="sprite-trail"
+          :style="trailStyle(ti)"
+          alt=""
+        />
+        <!-- 主精灵 -->
+        <div
+          class="sprite-container"
+          :class="{ faint: isFainting }"
+          :style="spriteContainerStyle"
+        >
           <img
             v-if="displayFrame"
             :src="displayFrame.src"
@@ -226,6 +247,221 @@ let frameAccumulator = 0;
 
 const stageConfig = computed(() => getStageVisualConfig(game.currentStage.value));
 
+// ==================== 视觉特效 ====================
+
+/** 主区域动态背景 + 抖动 */
+const shakeOffset = ref({ x: 0, y: 0 });
+let shakeRAF = 0;
+
+const mainStyle = computed(() => {
+  const cfg = stageConfig.value;
+  const bg = state.value === 'playing' ? cfg.background.gradient : 'linear-gradient(180deg, #0d1117 0%, #161b22 100%)';
+  const sx = shakeOffset.value.x;
+  const sy = shakeOffset.value.y;
+  return {
+    background: bg,
+    transform: (sx || sy) ? `translate(${sx}px, ${sy}px)` : undefined,
+    transition: state.value === 'playing' ? 'background 1.5s ease' : 'background 0.6s ease'
+  };
+});
+
+function startShake() {
+  function tick() {
+    const intensity = stageConfig.value.screenEffects.shake;
+    if (intensity > 0 && state.value === 'playing') {
+      const amp = intensity * 300; // shake 0.06 → 18px max
+      shakeOffset.value = {
+        x: (Math.random() - 0.5) * 2 * amp,
+        y: (Math.random() - 0.5) * 2 * amp
+      };
+    } else {
+      shakeOffset.value = { x: 0, y: 0 };
+    }
+    shakeRAF = requestAnimationFrame(tick);
+  }
+  shakeRAF = requestAnimationFrame(tick);
+}
+
+function stopShake() {
+  if (shakeRAF) { cancelAnimationFrame(shakeRAF); shakeRAF = 0; }
+  shakeOffset.value = { x: 0, y: 0 };
+}
+
+/** 暗角 */
+const vignetteStyle = computed(() => {
+  const v = stageConfig.value.screenEffects.vignette;
+  if (v <= 0) return { opacity: '0' };
+  return { opacity: String(v) };
+});
+
+/** 色差滤镜 (sprite) */
+const chromaticStyle = computed(() => {
+  const c = stageConfig.value.screenEffects.chromatic;
+  if (c <= 0) return {};
+  // c is ~0.002–0.01 → translate to px offset for text-shadow / drop-shadow trick
+  // We'll use CSS filter trick via drop-shadow layers
+  const px = c * 500; // 0.01 → 5px
+  return {
+    filter: `drop-shadow(${px}px 0 0 rgba(255,0,0,0.4)) drop-shadow(-${px}px 0 0 rgba(0,100,255,0.4))`
+  };
+});
+
+/** 精灵区域样式 (position context for trails) */
+const spriteAreaStyle = computed(() => {
+  return { position: 'relative' as const };
+});
+
+// ==================== 残影 (trail) ====================
+const MAX_TRAILS = 4;
+const trailHistory = ref<HTMLImageElement[]>([]);
+let trailInterval = 0;
+
+const trailFrames = computed(() => {
+  if (!stageConfig.value.cat.trailEffect || state.value !== 'playing') return [];
+  return trailHistory.value;
+});
+
+function trailStyle(index: number) {
+  const total = trailFrames.value.length;
+  const opacity = 0.15 - index * (0.1 / MAX_TRAILS);
+  const scale = stageConfig.value.cat.scale * (0.95 - index * 0.04);
+  const offset = (index + 1) * 8;
+  return {
+    opacity: Math.max(0.03, opacity),
+    transform: `scale(${scale}) translate(${offset}px, ${offset}px)`,
+    position: 'absolute' as const,
+    zIndex: total - index
+  };
+}
+
+function startTrail() {
+  trailHistory.value = [];
+  trailInterval = window.setInterval(() => {
+    const frame = displayFrame.value;
+    if (!frame || !stageConfig.value.cat.trailEffect) {
+      trailHistory.value = [];
+      return;
+    }
+    trailHistory.value = [frame, ...trailHistory.value].slice(0, MAX_TRAILS);
+  }, 80);
+}
+
+function stopTrail() {
+  if (trailInterval) { clearInterval(trailInterval); trailInterval = 0; }
+  trailHistory.value = [];
+}
+
+// ==================== 粒子系统 ====================
+const particleCanvas = ref<HTMLCanvasElement | null>(null);
+let particleRAF = 0;
+let particles: Array<{ x: number; y: number; vx: number; vy: number; size: number; color: string; life: number }> = [];
+
+function startParticles() {
+  const canvas = particleCanvas.value;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  function resize() {
+    if (!canvas) return;
+    canvas.width = canvas.offsetWidth * devicePixelRatio;
+    canvas.height = canvas.offsetHeight * devicePixelRatio;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  function tick() {
+    if (!canvas || !ctx) return;
+    const cfg = stageConfig.value.background.particles;
+    const w = canvas.width;
+    const h = canvas.height;
+
+    ctx.clearRect(0, 0, w, h);
+
+    if (!cfg.enabled || state.value !== 'playing') {
+      particles = [];
+      particleRAF = requestAnimationFrame(tick);
+      return;
+    }
+
+    // spawn to target count
+    while (particles.length < cfg.count) {
+      const colors = cfg.colors.length > 0 ? cfg.colors : ['#ffffff'];
+      particles.push({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        vx: (Math.random() - 0.5) * cfg.speed * 1.5,
+        vy: (Math.random() - 0.5) * cfg.speed * 1.5 - cfg.speed * 0.5,
+        size: cfg.size[0] + Math.random() * (cfg.size[1] - cfg.size[0]),
+        color: colors[Math.floor(Math.random() * colors.length)],
+        life: 0.5 + Math.random() * 0.5
+      });
+    }
+
+    // trim excess
+    if (particles.length > cfg.count) particles.length = cfg.count;
+
+    // update & draw
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.life -= 0.003;
+
+      if (p.life <= 0 || p.x < -20 || p.x > w + 20 || p.y < -20 || p.y > h + 20) {
+        // respawn
+        const colors = cfg.colors.length > 0 ? cfg.colors : ['#ffffff'];
+        p.x = Math.random() * w;
+        p.y = h + 10;
+        p.vx = (Math.random() - 0.5) * cfg.speed * 1.5;
+        p.vy = -Math.random() * cfg.speed * 2 - cfg.speed;
+        p.size = cfg.size[0] + Math.random() * (cfg.size[1] - cfg.size[0]);
+        p.color = colors[Math.floor(Math.random() * colors.length)];
+        p.life = 0.5 + Math.random() * 0.5;
+        continue;
+      }
+
+      const r = p.size * devicePixelRatio;
+      ctx.globalAlpha = Math.min(1, p.life * 2);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    particleRAF = requestAnimationFrame(tick);
+  }
+
+  particleRAF = requestAnimationFrame(tick);
+}
+
+function stopParticles() {
+  if (particleRAF) { cancelAnimationFrame(particleRAF); particleRAF = 0; }
+  particles = [];
+  const canvas = particleCanvas.value;
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx?.clearRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+// ==================== 猫晕倒动画 ====================
+const isFainting = ref(false);
+
+// ==================== 发声重新开始 ====================
+function setupVoiceRestart() {
+  // 中断后检测器仍可运行，监听任意元音 → 自动 restart
+  const onVowelForRestart = async (vowel: string) => {
+    if (vowel === 'silence') return;
+    if (state.value !== 'interrupted') return;
+    await handleRestart();
+  };
+
+  mlDetector.onVowelDetected(onVowelForRestart);
+  mfccDetector.onVowelDetected(onVowelForRestart);
+}
+
 /** 每帧基础持续时间 (ms)：总音节时长 / 循环帧数 */
 const baseFrameDuration = computed(() => {
   const pack = loadedPack.value;
@@ -255,7 +491,10 @@ const spriteContainerStyle = computed(() => {
 /** 精灵图片样式 */
 const spriteStyle = computed(() => {
   const cfg = stageConfig.value;
-  return { transform: `scale(${cfg.cat.scale})` };
+  return {
+    transform: `scale(${cfg.cat.scale})`,
+    ...chromaticStyle.value
+  };
 });
 
 /** 帧动画循环 */
@@ -302,9 +541,9 @@ let lastPlayerVowelTime = 0;
 let playerIntervals: number[] = [];
 const INTERVAL_WINDOW = 6;
 
-/** 播放指定序列位置的 syllable 音频 */
+/** 播放指定序列位置的 syllable 音频 (带阶段变调) */
 function playExpectedSyllable(seqIndex: number) {
-  resPack.playSyllable(seqIndex);
+  resPack.playSyllable(seqIndex, stageConfig.value.audio.sfxPitch);
 }
 
 // 监听 sequenceIndex 变化 → 播放对应音节 + 计算速度比
@@ -386,7 +625,11 @@ const formattedDuration = computed(() => {
 // ==================== 状态联动 ====================
 watch(state, (newState, oldState) => {
   if (newState === 'playing' && oldState !== 'playing') {
+    isFainting.value = false;
     startAnimation();
+    startShake();
+    startParticles();
+    startTrail();
     playExpectedSyllable(stats.value.sequenceIndex);
     lastPlayerVowelTime = 0;
     playerIntervals = [];
@@ -395,9 +638,15 @@ watch(state, (newState, oldState) => {
   }
   if (newState !== 'playing' && oldState === 'playing') {
     stopAnimation();
+    stopShake();
+    stopTrail();
+    // particles keep rendering but will clear since state !== playing
   }
   if (newState === 'interrupted' && oldState === 'playing') {
-    activeDetector.value.stop();
+    // 猫晕倒动画
+    isFainting.value = true;
+    // 不停止检测器 — 保持监听以支持发声重新开始
+    // activeDetector.value.stop(); // 移除：保留监听
   }
 });
 
@@ -439,8 +688,11 @@ const handleStop = () => {
 };
 
 const handleRestart = async () => {
+  isFainting.value = false;
   resetGame();
   try {
+    // 检测器可能仍在运行（发声重启路径），先停再启确保干净状态
+    activeDetector.value.stop();
     await activeDetector.value.start();
     startGame();
     lastInterruptReason.value = null;
@@ -450,19 +702,26 @@ const handleRestart = async () => {
 };
 
 const handleBackToIdle = () => {
+  isFainting.value = false;
   activeDetector.value.stop();
   resetGame();
   lastInterruptReason.value = null;
 };
 
 // ==================== 初始化 ====================
+setupVoiceRestart();
+
 onMounted(async () => {
   await resPack.fetchAvailablePacks();
   try { await resPack.loadPack(currentPackId.value); } catch { /* handled */ }
+  startParticles(); // 初始化 canvas（idle 时不渲染粒子）
 });
 
 onUnmounted(() => {
   stopAnimation();
+  stopShake();
+  stopParticles();
+  stopTrail();
   resPack.dispose();
 });
 </script>
@@ -478,6 +737,50 @@ onUnmounted(() => {
   color: #e6edf3;
   overflow: hidden;
   user-select: none;
+  position: relative;
+}
+
+/* ==================== 特效层 ==================== */
+.particle-layer {
+  position: fixed; inset: 0; z-index: 1;
+  pointer-events: none;
+  width: 100%; height: 100%;
+}
+.vignette-layer {
+  position: fixed; inset: 0; z-index: 2;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.8) 100%);
+  transition: opacity 0.5s ease;
+}
+.game-header, .game-main, .game-footer { position: relative; z-index: 3; }
+
+/* ==================== 残影 ==================== */
+.sprite-trail {
+  max-width: 100%; max-height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+/* ==================== 猫晕倒 ==================== */
+.sprite-container.faint {
+  animation: faint-fall 0.8s ease-in forwards !important;
+}
+@keyframes faint-fall {
+  0%   { transform: rotate(0deg) scale(1); opacity: 1; filter: none; }
+  30%  { transform: rotate(15deg) scale(1.05); opacity: 1; }
+  100% { transform: rotate(90deg) scale(0.7) translateY(60px); opacity: 0.3; filter: grayscale(0.8); }
+}
+
+/* ==================== 发声重启提示 ==================== */
+.voice-restart-hint {
+  margin-top: 14px;
+  font-size: 12px; color: #8b949e;
+  animation: hint-pulse 2s ease-in-out infinite;
+}
+@keyframes hint-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
 }
 
 /* ==================== 加载 ==================== */
@@ -558,6 +861,8 @@ onUnmounted(() => {
 .game-main {
   flex: 1; display: flex; flex-direction: column;
   min-height: 0;
+  border-radius: 0;
+  will-change: background, transform;
 }
 
 /* ==================== 分数面板 ==================== */
@@ -582,6 +887,7 @@ onUnmounted(() => {
 .sprite-area {
   flex: 1; display: flex; align-items: center; justify-content: center;
   padding: 16px; min-height: 0;
+  position: relative;
 }
 .sprite-container {
   max-width: 360px; max-height: 360px;
