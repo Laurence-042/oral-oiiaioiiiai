@@ -471,6 +471,10 @@ export function connectVowelDetectorToGameState(
 
   // 连接元音检测
   vowelDetector.onVowelDetected((vowel) => {
+    // 过滤掉 silence —— silence 由 onSilence 超时路径处理
+    // 若将 silence 送入 processVowel 会被视为错误元音，
+    // 连续 3 次即中断游戏
+    if (vowel === 'silence') return;
     gameState.processVowel(vowel);
   });
 

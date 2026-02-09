@@ -19,6 +19,7 @@ const TARGET_SAMPLE_RATE = 16000; // 训练模型使用的采样率
 const HYSTERESIS_HIGH = 0.6;
 const HYSTERESIS_LOW = 0.45;
 const SWITCH_MARGIN = 0.08;
+const SUSTAINED_RE_EMIT_INTERVAL = 300; // 持续发同一元音时，每隔300ms重新触发一次
 
 /**
  * TensorFlow.js 元音检测器 Composable
@@ -67,7 +68,6 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
   let audioBuffer: Float32Array | null = null;
   let bufferIndex = 0;
   let animationFrameId: number | null = null;
-  let lastAnalysisTime = 0;
   let actualSampleRate = 44100; // 实际采样率（会在初始化时检测）
   let resampleRatio = 1; // 重采样比例
   
@@ -76,6 +76,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
   let hadGapSinceLastEmit = true;
   let stableVowel: Vowel | null = null;
   let stableProb = 0;
+  let lastEmitTime = 0; // 上次触发 onVowelDetected 的时间
   
   // 静音检测状态
   let silenceStartTime: number | null = null;
@@ -154,8 +155,8 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
       bufferIndex = 0;
 
       // 创建 ScriptProcessorNode 用于收集音频数据
-      // 使用 4096 样本的缓冲大小（标准值）
-      const scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+      // 使用 2048 样本的缓冲大小，降低延迟（~46ms @ 44100Hz）
+      const scriptNode = audioContext.createScriptProcessor(2048, 1, 1);
       
       scriptNode.onaudioprocess = (event: AudioProcessingEvent) => {
         const inputData = event.inputBuffer.getChannelData(0);
@@ -203,16 +204,6 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
     if (!model || !audioBuffer || !isListening.value) return;
 
     const now = performance.now();
-    // ⚠️ 关键：使用目标采样率计算帧时间（不是实际采样率）
-    const frameTime = (INPUT_SAMPLES / TARGET_SAMPLE_RATE) * 1000; // ms 为单位的帧时间
-    const analysisInterval = Math.max(cfg.frameTime, frameTime * 0.5);
-    
-    // 控制分析频率
-    if (now - lastAnalysisTime < analysisInterval) {
-      animationFrameId = requestAnimationFrame(analyzeAudio);
-      return;
-    }
-    lastAnalysisTime = now;
 
     try {
       // 从循环缓冲区正确读取数据
@@ -269,11 +260,29 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
             stableProb = 0;
           }
         } else {
-          const canSwitch = candidateProb >= HYSTERESIS_HIGH &&
-            candidateProb >= stableProb + SWITCH_MARGIN;
-          if (canSwitch) {
-            stableVowel = candidate;
-            stableProb = candidateProb;
+          // 关键修复：用当前帧中旧元音的实际概率更新 stableProb
+          // 否则 stableProb 会停留在历史峰值，导致永远无法切换
+          const stableVowelIdx = VOWEL_CLASSES.indexOf(stableVowel!);
+          if (stableVowelIdx >= 0 && stableVowelIdx < probabilities.length) {
+            stableProb = probabilities[stableVowelIdx];
+          }
+          // 旧元音概率衰减到阈值以下时，直接清除
+          if (stableProb < HYSTERESIS_LOW) {
+            stableVowel = null;
+            stableProb = 0;
+            // 如果新候选超过阈值，立即采纳
+            if (candidateProb >= HYSTERESIS_HIGH) {
+              stableVowel = candidate;
+              stableProb = candidateProb;
+            }
+          } else {
+            // 旧元音仍然存在，但新候选超过旧元音+余量时切换
+            const canSwitch = candidateProb >= HYSTERESIS_HIGH &&
+              candidateProb >= stableProb + SWITCH_MARGIN;
+            if (canSwitch) {
+              stableVowel = candidate;
+              stableProb = candidateProb;
+            }
           }
         }
 
@@ -327,12 +336,17 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
   // ==================== 元音检测处理 ====================
   function handleVowelDetected(vowel: Vowel, result: VowelDetectionResult): void {
     const isNewVowel = vowel !== lastConfirmedVowel;
+    const now = performance.now();
+    // 持续发同一元音时，每隔一段时间重新触发（支持序列中连续相同元音如 I,I,I）
+    const sustainedReEmit = !isNewVowel && !hadGapSinceLastEmit 
+      && (now - lastEmitTime >= SUSTAINED_RE_EMIT_INTERVAL);
     
-    // 触发条件：元音变化 或 经过了静音间隔
-    if (isNewVowel || hadGapSinceLastEmit) {
+    // 触发条件：元音变化 / 经过了静音间隔 / 持续发音重新触发
+    if (isNewVowel || hadGapSinceLastEmit || sustainedReEmit) {
       confirmedVowel.value = vowel;
       lastConfirmedVowel = vowel;
       hadGapSinceLastEmit = false;
+      lastEmitTime = now;
       emitVowelDetected(vowel, result);
     }
   }
@@ -357,6 +371,10 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
     hadGapSinceLastEmit = true;
     confirmedVowel.value = null;
     lastConfirmedVowel = null;
+    lastEmitTime = 0;
+    // 重置 Schmitt 触发器状态，防止旧元音干扰下次检测
+    stableVowel = null;
+    stableProb = 0;
   }
 
   // ==================== 控制方法 ====================
@@ -374,7 +392,6 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
     }
 
     isListening.value = true;
-    lastAnalysisTime = 0;
     silenceStartTime = null;
     bufferIndex = 0;
     
@@ -393,6 +410,9 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
     confirmedVowel.value = null;
     lastConfirmedVowel = null;
     hadGapSinceLastEmit = true;
+    lastEmitTime = 0;
+    stableVowel = null;
+    stableProb = 0;
   }
 
   function reset(): void {

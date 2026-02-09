@@ -5,7 +5,7 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      redirect: '/debug-ml'
+      redirect: '/game'
     },
     {
       path: '/debug',
@@ -28,7 +28,7 @@ const router = createRouter({
     {
       path: '/game',
       name: 'game',
-      component: () => import('@/views/DebugView.vue'), // 暂时指向 DebugView
+      component: () => import('@/views/GameView.vue'),
       meta: { title: 'OIIAIOIIIAI' }
     }
   ]
