@@ -221,6 +221,11 @@
           >
             <input type="checkbox" :checked="syl.selected" @click.stop="toggleSyllableSelection(idx)" />
             <span class="syl-idx">#{{ idx + 1 }}</span>
+            <input
+              type="text" class="syl-label" :value="syl.label" maxlength="6"
+              @input="syl.label = ($event.target as HTMLInputElement).value.toUpperCase()"
+              @click.stop placeholder="元音"
+            />
             <span class="syl-time">{{ formatMs(syl.startMs) }} – {{ formatMs(syl.endMs) }}</span>
             <span class="syl-dur">{{ (syl.endMs - syl.startMs).toFixed(0) }}ms</span>
             <button class="btn btn-small" @click.stop="playSyllable(idx)" :disabled="playingSyllableIdx !== null">▶</button>
@@ -358,6 +363,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, nextTick, onUnmounted, type ComponentPublicInstance } from 'vue';
 import JSZip from 'jszip';
+import { getTargetSequence } from '@/config/vowels';
 
 // ==================== 类型定义 ====================
 interface Segment {
@@ -370,6 +376,7 @@ interface SyllableSegment {
   startMs: number;
   endMs: number;
   selected: boolean;
+  label: string;
 }
 
 interface FrameData {
@@ -528,7 +535,9 @@ function rebuildSyllablesFromSplits() {
     const matched = oldSyls.find(s =>
       Math.abs(s.startMs - startMs) < 50 && Math.abs(s.endMs - endMs) < 50
     );
-    newSyls.push({ startMs, endMs, selected: matched ? matched.selected : true });
+    const seq = getTargetSequence();
+    const fallbackLabel = seq[i % seq.length] ?? '';
+    newSyls.push({ startMs, endMs, selected: matched ? matched.selected : true, label: matched?.label ?? fallbackLabel });
   }
   syllables.value = newSyls;
   nextTick(() => {
@@ -1001,12 +1010,15 @@ function detectSyllables() {
       const startMs = boundaries[i];
       const endMs = boundaries[i + 1];
       if (endMs - startMs >= syllableParams.minDurationMs) {
-        result.push({ startMs, endMs, selected: true });
+        const seq = getTargetSequence();
+        const vowelLabel = seq[result.length % seq.length] ?? '';
+        result.push({ startMs, endMs, selected: true, label: vowelLabel });
       }
     }
 
     if (result.length === 0) {
-      result.push({ startMs: 0, endMs: totalMs, selected: true });
+      const seq = getTargetSequence();
+      result.push({ startMs: 0, endMs: totalMs, selected: true, label: seq[0] ?? '' });
     }
 
     syllables.value = result;
@@ -1088,7 +1100,8 @@ async function exportSyllableWavs() {
       }
 
       const wavBlob = audioBufferToWav(sylBuf);
-      zip.file(`syllable_${String(i + 1).padStart(3, '0')}.wav`, wavBlob);
+      const label = syl.label || 'X';
+      zip.file(`${String(i + 1).padStart(3, '0')}_${label}.wav`, wavBlob);
       audioCtx.close();
     }
 
@@ -1901,6 +1914,23 @@ onUnmounted(() => {
 .syllable-card input[type="checkbox"] { accent-color: #feca57; }
 
 .syl-idx { color: #feca57; font-weight: bold; min-width: 36px; }
+.syl-label {
+  width: 48px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: #ff6b6b;
+  font-weight: 700;
+  font-size: 0.85rem;
+  text-align: center;
+  text-transform: uppercase;
+}
+.syl-label:focus {
+  outline: none;
+  border-color: #feca57;
+  background: rgba(255, 255, 255, 0.15);
+}
 .syl-time { color: #888; font-size: 0.85rem; }
 .syl-dur { color: #48dbfb; font-size: 0.85rem; }
 
