@@ -15,9 +15,9 @@
     <!-- ==================== 结算遮罩 ==================== -->
     <Transition name="overlay">
       <div v-if="state === 'interrupted'" class="result-overlay" @click.self="handleRestart">
-        <!-- 牌堆：分享图片 / 视频预览倾斜在卡片后面 -->
+        <!-- 牌堆 -->
         <div class="result-stack">
-          <!-- 分享图预览（可长按/右键保存） -->
+          <!-- 分享图（倾斜在左侧） -->
           <img
             v-if="shareImageUrl"
             :src="shareImageUrl"
@@ -25,16 +25,6 @@
             alt="分享图片 — 长按或右键保存"
             draggable="true"
           />
-          <!-- 视频预览（可长按/右键保存） -->
-          <video
-            v-if="shareVideoUrl"
-            :src="shareVideoUrl"
-            class="stack-card stack-video"
-            muted
-            loop
-            autoplay
-            playsinline
-          ></video>
 
           <!-- 主结算卡片 -->
           <div class="result-card">
@@ -66,9 +56,25 @@
               </div>
             </div>
 
+            <!-- 高光时刻 -->
+            <div v-if="hlMoments.highlights.value.length" class="highlights-section">
+              <h3 class="highlights-title">📸 高光时刻</h3>
+              <div class="highlights-strip">
+                <div
+                  v-for="hl in hlMoments.highlights.value"
+                  :key="hl.id"
+                  class="highlight-card"
+                >
+                  <span class="highlight-label">{{ hl.label }}</span>
+                  <span class="highlight-score">{{ hl.score }} 分</span>
+                  <span class="highlight-combo" v-if="hl.combo">×{{ hl.combo }}</span>
+                </div>
+              </div>
+            </div>
+
             <!-- 分享提示 -->
-            <p class="share-hint" v-if="shareImageUrl || shareVideoUrl">
-              👆 长按或右键点击后面的卡片保存分享
+            <p class="share-hint" v-if="shareImageUrl || hlMoments.highlights.value.length">
+              👆 长按或右键保存图片分享
             </p>
 
             <div class="result-actions">
@@ -276,7 +282,7 @@ import { useGameState, connectVowelDetectorToGameState } from '@/composables/use
 import { useResourcePack } from '@/composables/useResourcePack';
 import { useDynamicBGM } from '@/composables/useDynamicBGM';
 import { useShareCapture, generateCopywriting } from '@/composables/useShareCapture';
-import { useVideoRecorder } from '@/composables/useVideoRecorder';
+import { useHighlights } from '@/composables/useHighlights';
 import { getStageVisualConfig } from '@/config/stages';
 import { isFuzzyMatch } from '@/config/vowels';
 import type { InterruptReason, Vowel, VowelDetectorHookReturn, VowelDetectionResult } from '@/types/game';
@@ -337,9 +343,8 @@ const bgm = useDynamicBGM();
 
 // ==================== 分享系统 ====================
 const shareCapture = useShareCapture();
-const videoRecorder = useVideoRecorder();
+const hlMoments = useHighlights();
 const shareImageUrl = ref<string | null>(null);
-const shareVideoUrl = ref<string | null>(null);
 
 // ==================== 资源包 ====================
 const resPack = useResourcePack();
@@ -901,33 +906,17 @@ watch(state, (newState, oldState) => {
       bgm.setStage(game.currentStage.value);
       bgm.start();
 
-      // 启动视频录制（自动录制最后 30 秒）
-      if (videoRecorder.isSupported.value) {
-        const gameEl = document.querySelector('.game-view') as HTMLElement;
-        if (gameEl) {
-          // 清理上一局的分享素材
-          if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
-          if (shareVideoUrl.value) { URL.revokeObjectURL(shareVideoUrl.value); shareVideoUrl.value = null; }
-          videoRecorder.startRecording(gameEl, { maxDuration: 30000 });
-        }
-      }
+      // 清理上一局的素材
+      if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
+      hlMoments.clear();
     }
   }
   if (newState !== 'playing' && oldState === 'playing') {
+    hlMoments.captureFinal(stats.value.score, stats.value.combo, game.currentStage.value);
     stopAnimation();
     stopShake();
     stopTrail();
     bgm.stop();
-
-    // 停止视频录制 → 生成可预览的 URL
-    if (videoRecorder.isRecording.value) {
-      videoRecorder.stopRecording().then((blob) => {
-        if (blob) {
-          if (shareVideoUrl.value) URL.revokeObjectURL(shareVideoUrl.value);
-          shareVideoUrl.value = URL.createObjectURL(blob);
-        }
-      });
-    }
   }
   if (newState === 'paused' && oldState === 'playing') {
     // 暂停：停止特效，不晕倒，不停检测器（倒计时恢复后继续用）
@@ -958,9 +947,18 @@ game.onComboBreak((_combo, reason) => {
   lastInterruptReason.value = reason;
 });
 
-// BGM 阶段联动
+// ==================== 高光时刻 ====================
 game.onStageChange((_from, to) => {
   bgm.setStage(to);
+  hlMoments.onStageUp(_from, to, stats.value.score, stats.value.combo);
+});
+
+game.onPerfectCycle((count) => {
+  hlMoments.onPerfectCycle(count, stats.value.score, stats.value.combo, game.currentStage.value);
+});
+
+game.onScoreUpdate(() => {
+  hlMoments.onComboUpdate(stats.value.combo, stats.value.score, game.currentStage.value);
 });
 
 // ==================== 用户操作 ====================
@@ -1040,7 +1038,7 @@ const handleRestart = async () => {
   isFainting.value = false;
   // 清理分享素材
   if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
-  if (shareVideoUrl.value) { URL.revokeObjectURL(shareVideoUrl.value); shareVideoUrl.value = null; }
+  hlMoments.clear();
   resetGame();
   try {
     activeDetector.value.stop();
@@ -1056,7 +1054,7 @@ const handleRestart = async () => {
 const handleBackToIdle = () => {
   isFainting.value = false;
   if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
-  if (shareVideoUrl.value) { URL.revokeObjectURL(shareVideoUrl.value); shareVideoUrl.value = null; }
+  hlMoments.clear();
   activeDetector.value.stop();
   resetGame();
   lastInterruptReason.value = null;
@@ -1090,9 +1088,7 @@ onUnmounted(() => {
   stopParticles();
   stopTrail();
   bgm.dispose();
-  videoRecorder.dispose();
   if (shareImageUrl.value) URL.revokeObjectURL(shareImageUrl.value);
-  if (shareVideoUrl.value) URL.revokeObjectURL(shareVideoUrl.value);
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = 0; }
   resPack.dispose();
 });
@@ -1523,17 +1519,11 @@ onUnmounted(() => {
   transform: rotate(-8deg) translate(-110%, -10%);
   z-index: -1;
 }
-.stack-video {
-  width: 160px; height: auto; max-height: 200px;
-  transform: rotate(7deg) translate(110%, -8%);
-  z-index: -1;
-}
 .stack-card:hover {
   z-index: 10;
   box-shadow: 0 16px 56px rgba(88,160,255,0.3);
 }
 .stack-img:hover { transform: rotate(-3deg) translate(-110%, -14%) scale(1.08); }
-.stack-video:hover { transform: rotate(3deg) translate(110%, -12%) scale(1.08); }
 
 .result-card {
   background: linear-gradient(145deg, rgba(22,27,34,0.97), rgba(13,17,23,0.99));
@@ -1573,6 +1563,60 @@ onUnmounted(() => {
 }
 .result-value { display: block; font-size: 20px; font-weight: 700; }
 .result-stat.main .result-value { font-size: 32px; }
+
+/* 高光时刻画廊 */
+.highlights-section {
+  margin-bottom: 16px;
+}
+.highlights-title {
+  font-size: 13px;
+  color: #8b949e;
+  margin-bottom: 8px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+.highlights-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.15) transparent;
+}
+.highlights-strip::-webkit-scrollbar {
+  height: 4px;
+}
+.highlights-strip::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.15);
+  border-radius: 2px;
+}
+.highlight-card {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.05);
+  min-width: 72px;
+}
+.highlight-card .highlight-label {
+  font-size: 11px;
+  color: #ccc;
+  white-space: nowrap;
+}
+.highlight-card .highlight-score {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f0f0f0;
+}
+.highlight-card .highlight-combo {
+  font-size: 11px;
+  color: #58a0ff;
+  font-weight: 600;
+}
 
 .share-hint {
   font-size: 12px; color: #6e7681; margin-bottom: 16px;
@@ -1734,15 +1778,13 @@ onUnmounted(() => {
   width: 120px;
   transform: rotate(-6deg) translate(-90%, -5%);
 }
-.mobile .stack-video {
-  width: 110px;
-  transform: rotate(5deg) translate(90%, -3%);
-}
 .mobile .result-card { padding: 28px 20px; }
 .mobile .result-title { font-size: 22px; }
 .mobile .result-stats { gap: 8px; margin-bottom: 16px; }
 .mobile .result-stat { padding: 10px 8px; }
 .mobile .share-hint { font-size: 11px; }
+.mobile .highlight-card { min-width: 56px; padding: 6px 8px; }
+.mobile .highlight-card .highlight-label { font-size: 9px; }
 
 .mobile .game-footer { padding: 10px 14px 16px; }
 .mobile .btn { padding: 10px 16px; font-size: 13px; }
