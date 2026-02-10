@@ -47,8 +47,44 @@
             <button class="btn primary large" @click="handleRestart">🔄 再来一次</button>
             <button class="btn ghost" @click="handleBackToIdle">返回首页</button>
           </div>
-          <p class="voice-restart-hint">🎤 或直接发声重新开始</p>
         </div>
+      </div>
+    </Transition>
+
+    <!-- ==================== 预备遮罩 ==================== -->
+    <Transition name="overlay">
+      <div v-if="state === 'ready'" class="ready-overlay">
+        <div class="ready-card">
+          <div class="ready-icon">🎤</div>
+          <h2 class="ready-title">预备</h2>
+          <p class="ready-hint">请发出 <strong>"{{ readyVowel }}"</strong> 音开始游戏</p>
+          <div class="ready-pulse-ring"></div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- ==================== 暂停遮罩 ==================== -->
+    <Transition name="overlay">
+      <div v-if="state === 'paused' && countdownValue <= 0" class="pause-overlay">
+        <div class="pause-card">
+          <div class="pause-icon">⏸</div>
+          <h2 class="pause-title">已暂停</h2>
+          <div class="pause-stats-row">
+            <span>🎯 {{ stats.score }} 分</span>
+            <span>🔥 {{ stats.combo }}x 连击</span>
+          </div>
+          <div class="pause-actions">
+            <button class="btn primary large" @click="handleResume">▶ 继续游戏</button>
+            <button class="btn ghost" @click="handleQuitFromPause">🏠 结束并返回</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- ==================== 倒计时遮罩 ==================== -->
+    <Transition name="overlay">
+      <div v-if="countdownValue > 0" class="countdown-overlay">
+        <div class="countdown-number" :key="countdownValue">{{ countdownValue }}</div>
       </div>
     </Transition>
 
@@ -63,17 +99,17 @@
           v-if="availablePacks.length > 1"
           class="pack-select"
           :value="currentPackId"
-          :disabled="state === 'playing'"
+          :disabled="state === 'playing' || state === 'ready' || state === 'paused'"
           @change="onPackChange"
         >
           <option v-for="p in availablePacks" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
         <!-- 检测器切换 -->
-        <div class="detector-toggle" :class="{ disabled: state === 'playing' }">
+        <div class="detector-toggle" :class="{ disabled: state === 'playing' || state === 'ready' || state === 'paused' }">
           <button class="toggle-btn" :class="{ active: detectorMode === 'ml' }"
-            :disabled="state === 'playing'" @click="switchDetector('ml')">CNN</button>
+            :disabled="state === 'playing' || state === 'ready' || state === 'paused'" @click="switchDetector('ml')">CNN</button>
           <button class="toggle-btn" :class="{ active: detectorMode === 'mfcc' }"
-            :disabled="state === 'playing'" @click="switchDetector('mfcc')">MFCC</button>
+            :disabled="state === 'playing' || state === 'ready' || state === 'paused'" @click="switchDetector('mfcc')">MFCC</button>
         </div>
         <span class="pill" :class="isListening ? 'on' : 'off'">
           {{ isListening ? '🎤' : '🔇' }}
@@ -82,13 +118,20 @@
     </header>
 
     <!-- ==================== 特效层 ==================== -->
-    <!-- 粒子 Canvas -->
-    <canvas ref="particleCanvas" class="particle-layer"></canvas>
     <!-- 暗角 -->
     <div class="vignette-layer" :style="vignetteStyle"></div>
 
     <!-- ==================== 主区域 ==================== -->
     <main class="game-main" :style="mainStyle">
+      <!-- 神猫动态光背景 -->
+      <Transition name="aurora-fade">
+        <div v-if="showAurora" class="main-aurora">
+          <div class="main-aurora-ring ring-1"></div>
+          <div class="main-aurora-ring ring-2"></div>
+          <div class="main-aurora-ring ring-3"></div>
+        </div>
+      </Transition>
+
       <!-- 分数面板 -->
       <section class="score-strip">
         <div class="score-item">
@@ -111,6 +154,8 @@
 
       <!-- 精灵动画区域 -->
       <section class="sprite-area" :style="spriteAreaStyle">
+        <!-- 粒子层（猫之下、背景之上） -->
+        <canvas ref="particleCanvas" class="particle-layer"></canvas>
         <!-- 残影层 -->
         <img
           v-for="(trail, ti) in trailFrames"
@@ -138,16 +183,18 @@
 
       <!-- 序列进度 + 检测信息 -->
       <section class="sequence-area">
-        <div class="sequence-track">
-          <span
-            v-for="(vowel, idx) in packSequence"
-            :key="idx"
-            class="seq-dot"
-            :class="{
-              active: idx === stats.sequenceIndex,
-              done: idx < stats.sequenceIndex || (stats.perfectCycles > 0 && idx >= stats.sequenceIndex)
-            }"
-          >{{ vowel }}</span>
+        <div class="sequence-window">
+          <TransitionGroup name="seq-slide" tag="div" class="sequence-track">
+            <span
+              v-for="item in visibleSequence"
+              :key="item.key"
+              class="seq-dot"
+              :class="{
+                active: item.isCurrent,
+                done: item.isPast
+              }"
+            >{{ item.vowel }}</span>
+          </TransitionGroup>
         </div>
 
         <div class="detect-row">
@@ -172,10 +219,12 @@
 
     <!-- ==================== 底栏 ==================== -->
     <footer class="game-footer">
-      <button class="btn primary" :disabled="state === 'playing' || packLoading" @click="handleStart">
+      <button class="btn primary" :disabled="state === 'playing' || state === 'ready' || state === 'paused' || packLoading" @click="handleStart">
         {{ state === 'idle' ? '🎤 开始游戏' : '🔄 重新开始' }}
       </button>
-      <button class="btn" :disabled="state !== 'playing'" @click="handleStop">⏸ 暂停</button>
+      <button class="btn" :disabled="state !== 'playing' && state !== 'ready'" @click="handleStop">
+        {{ state === 'ready' ? '✕ 取消' : '⏸ 暂停' }}
+      </button>
     </footer>
   </div>
 </template>
@@ -187,7 +236,8 @@ import { useVowelDetector } from '@/composables/useVowelDetector';
 import { useGameState, connectVowelDetectorToGameState } from '@/composables/useGameState';
 import { useResourcePack } from '@/composables/useResourcePack';
 import { getStageVisualConfig } from '@/config/stages';
-import type { InterruptReason, VowelDetectorHookReturn } from '@/types/game';
+import { isFuzzyMatch } from '@/config/vowels';
+import type { InterruptReason, Vowel, VowelDetectorHookReturn, VowelDetectionResult } from '@/types/game';
 
 type DetectorMode = 'ml' | 'mfcc';
 
@@ -207,7 +257,7 @@ onUnmounted(() => {
 // ==================== 检测器 ====================
 const mlDetector = useVowelDetectorML();
 const mfccDetector = useVowelDetector();
-const detectorMode = ref<DetectorMode>('ml');
+const detectorMode = ref<DetectorMode>('mfcc');
 const activeDetector = computed<VowelDetectorHookReturn>(() =>
   detectorMode.value === 'ml' ? mlDetector : mfccDetector
 );
@@ -220,7 +270,7 @@ connectVowelDetectorToGameState(mfccDetector, game);
 const currentResult = computed(() => activeDetector.value.currentResult.value);
 const confirmedVowel = computed(() => activeDetector.value.confirmedVowel.value);
 const isListening = computed(() => activeDetector.value.isListening.value);
-const { stats, state, snapshot, startGame, interrupt, reset: resetGame } = game;
+const { stats, state, snapshot, startGame, pauseGame, resumeGame, interrupt, reset: resetGame } = game;
 
 const confPct = computed(() => Math.round((currentResult.value?.confidence ?? 0) * 100));
 const volPct = computed(() => Math.max(0, Math.min(100, (currentResult.value?.volume ?? -100) + 100)));
@@ -236,6 +286,48 @@ const {
   sequence: packSequence
 } = resPack;
 
+// ==================== 序列滑动窗口 ====================
+const SEQ_PAST_COUNT = 2;    // 左侧已发过的音数
+const SEQ_FUTURE_COUNT = 4;  // 右侧即将发的音数
+
+interface SeqWindowItem {
+  vowel: string;
+  key: string;         // 唯一 key（含循环计数，避免 TransitionGroup 复用）
+  isCurrent: boolean;
+  isPast: boolean;
+}
+
+const visibleSequence = computed<SeqWindowItem[]>(() => {
+  const seq = packSequence.value;
+  if (seq.length === 0) return [];
+  const idx = stats.value.sequenceIndex;
+  const cycles = stats.value.perfectCycles;
+  const len = seq.length;
+  const items: SeqWindowItem[] = [];
+
+  for (let offset = -SEQ_PAST_COUNT; offset <= SEQ_FUTURE_COUNT; offset++) {
+    const rawPos = idx + offset;
+    // 计算实际循环和序列内位置
+    let cycleNum = cycles;
+    let seqPos = rawPos;
+    if (rawPos < 0) {
+      // 上一轮循环
+      seqPos = ((rawPos % len) + len) % len;
+      cycleNum = cycles - 1;
+    } else if (rawPos >= len) {
+      seqPos = rawPos % len;
+      cycleNum = cycles + Math.floor(rawPos / len);
+    }
+    items.push({
+      vowel: seq[seqPos],
+      key: `c${cycleNum}-i${seqPos}-o${offset}`,
+      isCurrent: offset === 0,
+      isPast: offset < 0
+    });
+  }
+  return items;
+});
+
 // ==================== 精灵动画 ====================
 const currentFrameIndex = ref(0);
 const animationSpeedRatio = ref(1);           // 平滑后的速率比
@@ -247,15 +339,35 @@ let frameAccumulator = 0;
 
 const stageConfig = computed(() => getStageVisualConfig(game.currentStage.value));
 
+/** 神猫阶段(5)启用极光背景 */
+const showAurora = computed(() => state.value === 'playing' && game.currentStage.value === 5);
+
 // ==================== 视觉特效 ====================
 
-/** 主区域动态背景 + 抖动 */
+/** 震动系统：每次发音触发一次冲击，快速衰减 */
 const shakeOffset = ref({ x: 0, y: 0 });
 let shakeRAF = 0;
+let shakeEnergy = 0;            // 当前震动能量 (0-1)
+const SHAKE_DECAY = 0.88;       // 每帧衰减系数（越小衰减越快）
+const SHAKE_THRESHOLD = 0.005;  // 低于此值归零
+
+/** 触发一次震动冲击 */
+function triggerShake() {
+  const intensity = stageConfig.value.screenEffects.shake;
+  if (intensity <= 0 || state.value !== 'playing') return;
+  // 叠加能量，但不超过 1
+  shakeEnergy = Math.min(1, shakeEnergy + 0.6);
+}
 
 const mainStyle = computed(() => {
   const cfg = stageConfig.value;
-  const bg = state.value === 'playing' ? cfg.background.gradient : 'linear-gradient(180deg, #0d1117 0%, #161b22 100%)';
+  // 神猫阶段用深色底色，让内部 aurora 光效显现
+  const isAurora = showAurora.value;
+  const bg = state.value !== 'playing'
+    ? 'linear-gradient(180deg, #0d1117 0%, #161b22 100%)'
+    : isAurora
+      ? 'radial-gradient(ellipse at center, #1a0a2e 0%, #0d0520 40%, #050210 100%)'
+      : cfg.background.gradient;
   const sx = shakeOffset.value.x;
   const sy = shakeOffset.value.y;
   return {
@@ -267,15 +379,19 @@ const mainStyle = computed(() => {
 
 function startShake() {
   function tick() {
-    const intensity = stageConfig.value.screenEffects.shake;
-    if (intensity > 0 && state.value === 'playing') {
-      const amp = intensity * 300; // shake 0.06 → 18px max
+    if (shakeEnergy > SHAKE_THRESHOLD && state.value === 'playing') {
+      const intensity = stageConfig.value.screenEffects.shake;
+      const amp = intensity * 300 * shakeEnergy;
       shakeOffset.value = {
         x: (Math.random() - 0.5) * 2 * amp,
         y: (Math.random() - 0.5) * 2 * amp
       };
+      shakeEnergy *= SHAKE_DECAY;
     } else {
-      shakeOffset.value = { x: 0, y: 0 };
+      shakeEnergy = 0;
+      if (shakeOffset.value.x !== 0 || shakeOffset.value.y !== 0) {
+        shakeOffset.value = { x: 0, y: 0 };
+      }
     }
     shakeRAF = requestAnimationFrame(tick);
   }
@@ -284,6 +400,7 @@ function startShake() {
 
 function stopShake() {
   if (shakeRAF) { cancelAnimationFrame(shakeRAF); shakeRAF = 0; }
+  shakeEnergy = 0;
   shakeOffset.value = { x: 0, y: 0 };
 }
 
@@ -368,7 +485,26 @@ function startParticles() {
     canvas.height = canvas.offsetHeight * devicePixelRatio;
   }
   resize();
-  window.addEventListener('resize', resize);
+  const ro = new ResizeObserver(resize);
+  ro.observe(canvas);
+
+  /** 从中心生成一个粒子 */
+  function spawnParticle(w: number, h: number, cfg: { speed: number; size: [number, number]; colors: string[] }) {
+    const cx = w / 2;
+    const cy = h / 2;
+    const angle = Math.random() * Math.PI * 2;
+    const speed = (0.5 + Math.random() * 1.5) * cfg.speed;
+    const colors = cfg.colors.length > 0 ? cfg.colors : ['#ffffff'];
+    return {
+      x: cx + (Math.random() - 0.5) * 20 * devicePixelRatio,
+      y: cy + (Math.random() - 0.5) * 20 * devicePixelRatio,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      size: cfg.size[0] + Math.random() * (cfg.size[1] - cfg.size[0]),
+      color: colors[Math.floor(Math.random() * colors.length)],
+      life: 0.4 + Math.random() * 0.6
+    };
+  }
 
   function tick() {
     if (!canvas || !ctx) return;
@@ -386,19 +522,8 @@ function startParticles() {
 
     // spawn to target count
     while (particles.length < cfg.count) {
-      const colors = cfg.colors.length > 0 ? cfg.colors : ['#ffffff'];
-      particles.push({
-        x: Math.random() * w,
-        y: Math.random() * h,
-        vx: (Math.random() - 0.5) * cfg.speed * 1.5,
-        vy: (Math.random() - 0.5) * cfg.speed * 1.5 - cfg.speed * 0.5,
-        size: cfg.size[0] + Math.random() * (cfg.size[1] - cfg.size[0]),
-        color: colors[Math.floor(Math.random() * colors.length)],
-        life: 0.5 + Math.random() * 0.5
-      });
+      particles.push(spawnParticle(w, h, cfg));
     }
-
-    // trim excess
     if (particles.length > cfg.count) particles.length = cfg.count;
 
     // update & draw
@@ -406,18 +531,15 @@ function startParticles() {
       const p = particles[i];
       p.x += p.vx;
       p.y += p.vy;
-      p.life -= 0.003;
+      p.life -= 0.005;
 
       if (p.life <= 0 || p.x < -20 || p.x > w + 20 || p.y < -20 || p.y > h + 20) {
-        // respawn
-        const colors = cfg.colors.length > 0 ? cfg.colors : ['#ffffff'];
-        p.x = Math.random() * w;
-        p.y = h + 10;
-        p.vx = (Math.random() - 0.5) * cfg.speed * 1.5;
-        p.vy = -Math.random() * cfg.speed * 2 - cfg.speed;
-        p.size = cfg.size[0] + Math.random() * (cfg.size[1] - cfg.size[0]);
-        p.color = colors[Math.floor(Math.random() * colors.length)];
-        p.life = 0.5 + Math.random() * 0.5;
+        // respawn from center
+        const np = spawnParticle(w, h, cfg);
+        p.x = np.x; p.y = np.y;
+        p.vx = np.vx; p.vy = np.vy;
+        p.size = np.size; p.color = np.color;
+        p.life = np.life;
         continue;
       }
 
@@ -449,17 +571,31 @@ function stopParticles() {
 // ==================== 猫晕倒动画 ====================
 const isFainting = ref(false);
 
-// ==================== 发声重新开始 ====================
-function setupVoiceRestart() {
-  // 中断后检测器仍可运行，监听任意元音 → 自动 restart
-  const onVowelForRestart = async (vowel: string) => {
+// ==================== 预备状态（等待首音） ====================
+/** 序列第一个元音（用于 ready 界面提示） */
+const readyVowel = computed(() => {
+  const seq = packSequence.value;
+  return seq.length > 0 ? seq[0] : 'U';
+});
+
+/** 在 ready 状态下监听首元音以正式开始 */
+function setupReadyTrigger() {
+  const onVowelForReady = (vowel: string, result?: VowelDetectionResult, mode?: DetectorMode) => {
+    if (state.value !== 'ready') return;
     if (vowel === 'silence') return;
-    if (state.value !== 'interrupted') return;
-    await handleRestart();
+    if (mode && mode !== detectorMode.value) return;
+    if (!result || result.status !== 'detected') return;
+    if (result.confidence < 0.5) return;
+    if (result.volume < -45) return;
+    // 检查是否为序列第一个元音（允许模糊匹配）
+    const expected = readyVowel.value as Vowel;
+    if (vowel !== expected && !isFuzzyMatch(expected, vowel as Vowel)) return;
+    // 正式开始
+    startGame();
   };
 
-  mlDetector.onVowelDetected(onVowelForRestart);
-  mfccDetector.onVowelDetected(onVowelForRestart);
+  mlDetector.onVowelDetected((vowel, result) => onVowelForReady(vowel, result, 'ml'));
+  mfccDetector.onVowelDetected((vowel, result) => onVowelForReady(vowel, result, 'mfcc'));
 }
 
 /** 每帧基础持续时间 (ms)：总音节时长 / 循环帧数 */
@@ -470,21 +606,26 @@ const baseFrameDuration = computed(() => {
 });
 
 /** 当前显示的帧图片 */
+const IDLE_SPEED_THRESHOLD = 0.08; // 速率低于此值显示静止帧
+
 const displayFrame = computed(() => {
   const pack = loadedPack.value;
   if (!pack) return null;
   if (state.value !== 'playing') return pack.idleFrame;
   if (pack.animationFrames.length === 0) return pack.idleFrame;
+  // 速率过低 → 显示静止帧
+  if (animationSpeedRatio.value < IDLE_SPEED_THRESHOLD) return pack.idleFrame;
   return pack.animationFrames[currentFrameIndex.value % pack.animationFrames.length];
 });
+
+/** 精灵旋转角度（JS 驱动，与速率联动） */
+const spriteRotation = ref(0);
 
 /** 精灵容器样式 (旋转) */
 const spriteContainerStyle = computed(() => {
   if (state.value !== 'playing') return {};
-  const cfg = stageConfig.value;
-  const dur = 360 / cfg.cat.rotationSpeed;
   return {
-    animation: `spin ${dur}s linear infinite`
+    transform: `rotate(${spriteRotation.value}deg)`
   };
 });
 
@@ -497,30 +638,51 @@ const spriteStyle = computed(() => {
   };
 });
 
+/** 速度衰减：用户停止发音后速率指数衰减至 0 */
+let lastVowelInputTime = 0;
+const SPEED_DECAY_DELAY = 400;   // 停止发音后多久开始衰减 (ms)
+const SPEED_DECAY_FACTOR = 0.92; // 每帧衰减系数
+
 /** 帧动画循环 */
 function startAnimation() {
   lastFrameTime = performance.now();
   frameAccumulator = 0;
   currentFrameIndex.value = 0;
+  spriteRotation.value = 0;
 
   function tick(now: number) {
     const dt = now - lastFrameTime;
     lastFrameTime = now;
 
+    // 检查是否需要衰减速率（停止发音后延迟衰减）
+    const timeSinceInput = now - lastVowelInputTime;
+    if (lastVowelInputTime > 0 && timeSinceInput > SPEED_DECAY_DELAY) {
+      rawSpeedRatio.value *= SPEED_DECAY_FACTOR;
+      if (rawSpeedRatio.value < 0.01) rawSpeedRatio.value = 0;
+    }
+
     // 平滑速率更新 (EMA)
     animationSpeedRatio.value += (rawSpeedRatio.value - animationSpeedRatio.value) * SMOOTH_FACTOR;
+    if (animationSpeedRatio.value < 0.01) animationSpeedRatio.value = 0;
 
-    // 帧时间 = 基础帧时间 / 速率比
-    const effectiveDuration = baseFrameDuration.value / animationSpeedRatio.value;
-    frameAccumulator += dt;
+    // 旋转角度更新（基于阶段配置转速 × 速率比）
+    const rotSpeed = stageConfig.value.cat.rotationSpeed; // deg/s
+    const degreesPerFrame = rotSpeed * animationSpeedRatio.value * (dt / 1000);
+    spriteRotation.value = (spriteRotation.value + degreesPerFrame) % 360;
 
-    if (effectiveDuration > 0 && frameAccumulator >= effectiveDuration) {
-      const steps = Math.floor(frameAccumulator / effectiveDuration);
-      const pack = loadedPack.value;
-      if (pack && pack.animationFrames.length > 0) {
-        currentFrameIndex.value = (currentFrameIndex.value + steps) % pack.animationFrames.length;
+    // 帧动画：速率足够高时推进帧
+    if (animationSpeedRatio.value >= IDLE_SPEED_THRESHOLD) {
+      const effectiveDuration = baseFrameDuration.value / animationSpeedRatio.value;
+      frameAccumulator += dt;
+
+      if (effectiveDuration > 0 && frameAccumulator >= effectiveDuration) {
+        const steps = Math.floor(frameAccumulator / effectiveDuration);
+        const pack = loadedPack.value;
+        if (pack && pack.animationFrames.length > 0) {
+          currentFrameIndex.value = (currentFrameIndex.value + steps) % pack.animationFrames.length;
+        }
+        frameAccumulator %= effectiveDuration;
       }
-      frameAccumulator %= effectiveDuration;
     }
 
     animationRAF = requestAnimationFrame(tick);
@@ -555,8 +717,12 @@ watch(
     // 播放新的期望音节（允许叠加）
     playExpectedSyllable(newIdx);
 
-    // 计算玩家速度
+    // 触发震动冲击
+    triggerShake();
+
+    // 记录最近发音时间（用于速度衰减）
     const now = performance.now();
+    lastVowelInputTime = now;
     if (lastPlayerVowelTime > 0) {
       const interval = now - lastPlayerVowelTime;
       playerIntervals.push(interval);
@@ -609,7 +775,7 @@ const interruptReasonText = computed(() => {
   switch (lastInterruptReason.value) {
     case 'silence_timeout': return '静音超时 — 超过 1.5 秒没有发音';
     case 'consecutive_errors': return '连续发音错误';
-    case 'manual': return '手动暂停';
+    case 'manual': return '手动结束';
     default: return '';
   }
 });
@@ -626,27 +792,42 @@ const formattedDuration = computed(() => {
 watch(state, (newState, oldState) => {
   if (newState === 'playing' && oldState !== 'playing') {
     isFainting.value = false;
-    startAnimation();
-    startShake();
-    startParticles();
-    startTrail();
-    playExpectedSyllable(stats.value.sequenceIndex);
-    lastPlayerVowelTime = 0;
-    playerIntervals = [];
-    rawSpeedRatio.value = 1;
-    animationSpeedRatio.value = 1;
+    if (oldState === 'paused') {
+      // 从暂停恢复 — 重启动画 & 特效，但不重置速度等
+      startAnimation();
+      startShake();
+      startTrail();
+      lastVowelInputTime = performance.now();
+    } else {
+      // 全新开始
+      startAnimation();
+      startShake();
+      startParticles();
+      startTrail();
+      playExpectedSyllable(stats.value.sequenceIndex);
+      lastPlayerVowelTime = 0;
+      lastVowelInputTime = performance.now();
+      playerIntervals = [];
+      rawSpeedRatio.value = 1;
+      animationSpeedRatio.value = 1;
+    }
   }
   if (newState !== 'playing' && oldState === 'playing') {
     stopAnimation();
     stopShake();
     stopTrail();
-    // particles keep rendering but will clear since state !== playing
   }
-  if (newState === 'interrupted' && oldState === 'playing') {
-    // 猫晕倒动画
-    isFainting.value = true;
-    // 不停止检测器 — 保持监听以支持发声重新开始
-    // activeDetector.value.stop(); // 移除：保留监听
+  if (newState === 'paused' && oldState === 'playing') {
+    // 暂停：停止特效，不晕倒，不停检测器（倒计时恢复后继续用）
+  }
+  if (newState === 'interrupted') {
+    if (oldState === 'playing') {
+      isFainting.value = true;
+    }
+    activeDetector.value.stop();
+    // 清理倒计时（从 handleQuitFromPause 路径）
+    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = 0; }
+    countdownValue.value = 0;
   }
 });
 
@@ -656,7 +837,7 @@ game.onComboBreak((_combo, reason) => {
 
 // ==================== 用户操作 ====================
 const switchDetector = (mode: DetectorMode) => {
-  if (mode === detectorMode.value || state.value === 'playing') return;
+  if (mode === detectorMode.value || state.value === 'playing' || state.value === 'ready' || state.value === 'paused') return;
   activeDetector.value.stop();
   resetGame();
   lastInterruptReason.value = null;
@@ -673,17 +854,57 @@ const handleStart = async () => {
   try {
     if (!loadedPack.value) await resPack.loadPack(currentPackId.value);
     if (state.value === 'interrupted') resetGame();
-    await activeDetector.value.start();
-    startGame();
+    // 进入 ready 状态 → 启动检测器 → 等待玩家发出首音
+    state.value = 'ready';
     lastInterruptReason.value = null;
+    await activeDetector.value.start();
   } catch (err) {
     console.error('启动失败', err);
   }
 };
 
+// ==================== 暂停 & 倒计时 ====================
+const countdownValue = ref(0);
+let countdownTimer = 0;
+
 const handleStop = () => {
-  lastInterruptReason.value = 'manual';
+  if (state.value === 'ready') {
+    // ready 状态取消 → 回到 idle
+    activeDetector.value.stop();
+    resetGame();
+    lastInterruptReason.value = null;
+    return;
+  }
+  // playing → paused
+  pauseGame();
+};
+
+const handleResume = () => {
+  if (state.value !== 'paused') return;
+  // 开始 3 秒倒计时
+  countdownValue.value = 3;
+  if (countdownTimer) clearInterval(countdownTimer);
+  countdownTimer = window.setInterval(() => {
+    countdownValue.value--;
+    if (countdownValue.value <= 0) {
+      clearInterval(countdownTimer);
+      countdownTimer = 0;
+      // 恢复游戏
+      resumeGame();
+    }
+  }, 1000);
+};
+
+const handleQuitFromPause = () => {
+  // 从暂停彻底退出
+  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = 0; }
+  countdownValue.value = 0;
   activeDetector.value.stop();
+  // 先恢复 playing 以便 interrupt 能创建快照
+  if (state.value === 'paused') {
+    state.value = 'playing';
+  }
+  lastInterruptReason.value = 'manual';
   interrupt('manual');
 };
 
@@ -691,11 +912,11 @@ const handleRestart = async () => {
   isFainting.value = false;
   resetGame();
   try {
-    // 检测器可能仍在运行（发声重启路径），先停再启确保干净状态
     activeDetector.value.stop();
-    await activeDetector.value.start();
-    startGame();
+    // 进入 ready 状态等待首音
+    state.value = 'ready';
     lastInterruptReason.value = null;
+    await activeDetector.value.start();
   } catch (err) {
     console.error('重新启动失败', err);
   }
@@ -709,7 +930,7 @@ const handleBackToIdle = () => {
 };
 
 // ==================== 初始化 ====================
-setupVoiceRestart();
+setupReadyTrigger();
 
 onMounted(async () => {
   await resPack.fetchAvailablePacks();
@@ -722,6 +943,7 @@ onUnmounted(() => {
   stopShake();
   stopParticles();
   stopTrail();
+  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = 0; }
   resPack.dispose();
 });
 </script>
@@ -742,9 +964,9 @@ onUnmounted(() => {
 
 /* ==================== 特效层 ==================== */
 .particle-layer {
-  position: fixed; inset: 0; z-index: 1;
+  position: absolute; inset: -50%; z-index: 0;
+  width: 200%; height: 200%;
   pointer-events: none;
-  width: 100%; height: 100%;
 }
 .vignette-layer {
   position: fixed; inset: 0; z-index: 2;
@@ -752,6 +974,7 @@ onUnmounted(() => {
   background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.8) 100%);
   transition: opacity 0.5s ease;
 }
+
 .game-header, .game-main, .game-footer { position: relative; z-index: 3; }
 
 /* ==================== 残影 ==================== */
@@ -760,6 +983,7 @@ onUnmounted(() => {
   object-fit: contain;
   pointer-events: none;
   transition: opacity 0.15s ease;
+  position: relative; z-index: 1;
 }
 
 /* ==================== 猫晕倒 ==================== */
@@ -863,13 +1087,90 @@ onUnmounted(() => {
   min-height: 0;
   border-radius: 0;
   will-change: background, transform;
+  position: relative;
+  overflow: hidden;
 }
+
+/* ==================== 神猫动态光背景 ==================== */
+.main-aurora {
+  position: absolute; inset: -60%; z-index: 0;
+  width: 220%; height: 220%;
+  pointer-events: none;
+}
+.main-aurora-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  will-change: transform, opacity;
+}
+.main-aurora-ring.ring-1 {
+  background: conic-gradient(
+    from 0deg,
+    rgba(255,107,107,0.5),
+    rgba(254,202,87,0.4),
+    rgba(72,219,251,0.45),
+    rgba(255,159,243,0.4),
+    rgba(84,160,255,0.45),
+    rgba(255,107,107,0.5)
+  );
+  filter: blur(50px);
+  mix-blend-mode: screen;
+  animation: main-aurora-spin 8s linear infinite;
+}
+.main-aurora-ring.ring-2 {
+  inset: 15%;
+  background: conic-gradient(
+    from 180deg,
+    rgba(84,160,255,0.45),
+    rgba(95,39,205,0.35),
+    rgba(0,210,211,0.5),
+    rgba(254,202,87,0.35),
+    rgba(255,107,107,0.4),
+    rgba(84,160,255,0.45)
+  );
+  filter: blur(70px);
+  mix-blend-mode: screen;
+  animation: main-aurora-spin-rev 12s linear infinite;
+}
+.main-aurora-ring.ring-3 {
+  inset: 25%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(255,255,255,0.15) 0%,
+    rgba(255,159,243,0.2) 30%,
+    rgba(72,219,251,0.1) 60%,
+    transparent 80%
+  );
+  filter: blur(40px);
+  animation: main-aurora-pulse 5s ease-in-out infinite;
+}
+
+@keyframes main-aurora-spin {
+  from { transform: rotate(0deg) scale(1); }
+  50%  { transform: rotate(180deg) scale(1.08); }
+  to   { transform: rotate(360deg) scale(1); }
+}
+@keyframes main-aurora-spin-rev {
+  from { transform: rotate(0deg) scale(1.05); }
+  50%  { transform: rotate(-180deg) scale(0.92); }
+  to   { transform: rotate(-360deg) scale(1.05); }
+}
+@keyframes main-aurora-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50%      { transform: scale(1.15); opacity: 1; }
+}
+
+.aurora-fade-enter-active { transition: opacity 1.5s ease; }
+.aurora-fade-leave-active { transition: opacity 0.8s ease; }
+.aurora-fade-enter-from,
+.aurora-fade-leave-to { opacity: 0; }
 
 /* ==================== 分数面板 ==================== */
 .score-strip {
   display: flex; justify-content: center; gap: 24px;
   padding: 10px 20px;
   flex-shrink: 0;
+  position: relative; z-index: 1;
 }
 .score-item {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
@@ -887,12 +1188,13 @@ onUnmounted(() => {
 .sprite-area {
   flex: 1; display: flex; align-items: center; justify-content: center;
   padding: 16px; min-height: 0;
-  position: relative;
+  position: relative; z-index: 1;
 }
 .sprite-container {
   max-width: 360px; max-height: 360px;
   width: 100%; height: 100%;
   display: flex; align-items: center; justify-content: center;
+  position: relative; z-index: 2;
 }
 .sprite-img {
   max-width: 100%; max-height: 100%;
@@ -904,28 +1206,53 @@ onUnmounted(() => {
 .sequence-area {
   padding: 12px 20px;
   flex-shrink: 0;
+  position: relative; z-index: 1;
+}
+.sequence-window {
+  display: flex; justify-content: center;
+  margin-bottom: 12px;
+  overflow: hidden;
 }
 .sequence-track {
-  display: flex; justify-content: center; gap: 6px;
-  flex-wrap: wrap; margin-bottom: 12px;
+  display: flex; gap: 6px;
+  position: relative;
 }
 .seq-dot {
-  width: 32px; height: 32px;
+  width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 8px; font-size: 13px; font-weight: 600;
+  border-radius: 8px; font-size: 14px; font-weight: 600;
   background: rgba(255,255,255,0.06);
   color: rgba(255,255,255,0.35);
-  transition: all 0.2s;
+  flex-shrink: 0;
+  transition: background 0.25s, color 0.25s, transform 0.25s, box-shadow 0.25s, opacity 0.25s;
 }
 .seq-dot.done {
   background: rgba(76,212,164,0.15);
-  color: rgba(76,212,164,0.7);
+  color: rgba(76,212,164,0.55);
+  opacity: 0.7;
 }
 .seq-dot.active {
-  background: rgba(255,205,86,0.45);
+  background: rgba(255,205,86,0.5);
   color: #1a1a2e;
-  transform: scale(1.2);
-  box-shadow: 0 0 12px rgba(255,205,86,0.4);
+  transform: scale(1.25);
+  box-shadow: 0 0 14px rgba(255,205,86,0.5);
+}
+/* TransitionGroup 动画 */
+.seq-slide-enter-active,
+.seq-slide-leave-active {
+  transition: all 0.3s ease;
+}
+.seq-slide-enter-from {
+  opacity: 0; transform: translateX(20px) scale(0.6);
+}
+.seq-slide-leave-to {
+  opacity: 0; transform: translateX(-20px) scale(0.6);
+}
+.seq-slide-leave-active {
+  position: absolute;
+}
+.seq-slide-move {
+  transition: transform 0.3s ease;
 }
 
 .detect-row {
@@ -1034,6 +1361,95 @@ onUnmounted(() => {
 .result-stat.main .result-value { font-size: 32px; }
 .result-actions { display: flex; flex-direction: column; gap: 10px; }
 
+/* ==================== 预备遮罩 ==================== */
+.ready-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.8); backdrop-filter: blur(8px);
+}
+.ready-card {
+  text-align: center; position: relative;
+}
+.ready-icon {
+  font-size: 64px; margin-bottom: 12px;
+  animation: ready-bounce 1.5s ease-in-out infinite;
+}
+.ready-title {
+  font-size: 28px; font-weight: 700; letter-spacing: 4px;
+  margin-bottom: 12px;
+}
+.ready-hint {
+  font-size: 16px; color: #8b949e;
+}
+.ready-hint strong {
+  font-size: 24px; color: #58a6ff;
+  display: inline-block; margin: 0 4px;
+}
+.ready-pulse-ring {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 120px; height: 120px;
+  border-radius: 50%;
+  border: 2px solid rgba(88,160,255,0.4);
+  animation: pulse-ring 2s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes ready-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+@keyframes pulse-ring {
+  0% { width: 80px; height: 80px; opacity: 1; }
+  100% { width: 200px; height: 200px; opacity: 0; }
+}
+
+/* ==================== 暂停遮罩 ==================== */
+.pause-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.7); backdrop-filter: blur(8px);
+}
+.pause-card {
+  text-align: center;
+  background: linear-gradient(145deg, rgba(22,27,34,0.97), rgba(13,17,23,0.99));
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 24px; padding: 36px 32px;
+  max-width: 360px; width: calc(100% - 32px);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+}
+.pause-icon { font-size: 52px; margin-bottom: 8px; }
+.pause-title {
+  font-size: 26px; font-weight: 700;
+  letter-spacing: 3px; margin-bottom: 16px;
+}
+.pause-stats-row {
+  display: flex; justify-content: center; gap: 20px;
+  font-size: 14px; color: #8b949e; margin-bottom: 28px;
+}
+.pause-actions {
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+/* ==================== 倒计时遮罩 ==================== */
+.countdown-overlay {
+  position: fixed; inset: 0; z-index: 150;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+}
+.countdown-number {
+  font-size: 120px; font-weight: 800;
+  color: #fff;
+  text-shadow: 0 0 40px rgba(88,160,255,0.6), 0 0 80px rgba(163,113,247,0.3);
+  animation: countdown-pop 1s ease-out;
+}
+@keyframes countdown-pop {
+  0% { transform: scale(2); opacity: 0; }
+  30% { transform: scale(0.9); opacity: 1; }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
 /* ==================== 动画 ==================== */
 @keyframes spin {
   from { transform: rotate(0deg); }
@@ -1072,7 +1488,7 @@ onUnmounted(() => {
 
 .mobile .sequence-area { padding: 10px 14px; }
 .mobile .seq-dot {
-  width: 26px; height: 26px; font-size: 11px; border-radius: 6px;
+  width: 30px; height: 30px; font-size: 12px; border-radius: 6px;
 }
 .mobile .detect-vowel {
   width: 48px; height: 48px; font-size: 24px; border-radius: 12px;

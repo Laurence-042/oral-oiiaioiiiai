@@ -97,7 +97,7 @@ export interface VowelDetectorHookReturn {
 // ==================== 游戏状态相关类型 ====================
 
 /** 游戏主状态 */
-export type GameState = 'idle' | 'playing' | 'interrupted' | 'sharing';
+export type GameState = 'idle' | 'ready' | 'playing' | 'paused' | 'interrupted' | 'sharing';
 
 /** 视觉阶段 1-5 */
 export type Stage = 1 | 2 | 3 | 4 | 5;

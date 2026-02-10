@@ -38,6 +38,8 @@ export interface UseGameStateReturn {
   
   /** 动作方法 */
   startGame: () => void;
+  pauseGame: () => void;
+  resumeGame: () => void;
   processVowel: (vowel: Vowel) => void;
   handleSilence: (duration: number) => void;
   interrupt: (reason: InterruptReason) => void;
@@ -350,6 +352,31 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     snapshot.value = null;
   }
 
+  /** 暂停时记录已经过的时长，恢复时修正 startTime */
+  let pausedElapsed = 0;
+
+  /**
+   * 暂停游戏（保留所有数据）
+   */
+  function pauseGame(): void {
+    if (state.value !== 'playing') return;
+    pausedElapsed = Date.now() - stats.value.startTime;
+    state.value = 'paused';
+  }
+
+  /**
+   * 从暂停恢复游戏
+   * 重置 hasFirstVowel 以避免恢复后立即触发静音超时
+   */
+  function resumeGame(): void {
+    if (state.value !== 'paused') return;
+    // 修正 startTime 使得持续时间衔接
+    stats.value.startTime = Date.now() - pausedElapsed;
+    stats.value.lastVowelTime = Date.now();
+    hasFirstVowel = false;
+    state.value = 'playing';
+  }
+
   /**
    * 中断游戏
    */
@@ -436,6 +463,8 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     isPlaying,
     sequenceProgress,
     startGame,
+    pauseGame,
+    resumeGame,
     processVowel,
     handleSilence,
     interrupt,

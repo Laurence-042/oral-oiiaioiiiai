@@ -14,10 +14,10 @@ import type { Stage, StageThreshold, StageVisualConfig } from '@/types/game';
  */
 export const STAGE_THRESHOLDS: StageThreshold[] = [
   { stage: 1, name: '初醒', scoreThreshold: 0 },
-  { stage: 2, name: '躁动', scoreThreshold: 500 },
-  { stage: 3, name: '狂热', scoreThreshold: 2000 },
-  { stage: 4, name: '超度', scoreThreshold: 5000 },
-  { stage: 5, name: '神猫', scoreThreshold: 10000 }
+  { stage: 2, name: '躁动', scoreThreshold: 100 },
+  { stage: 3, name: '狂热', scoreThreshold: 200 },
+  { stage: 4, name: '超度', scoreThreshold: 300 },
+  { stage: 5, name: '神猫', scoreThreshold: 400 }
 ];
 
 /**
