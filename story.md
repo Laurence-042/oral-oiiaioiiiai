@@ -360,7 +360,7 @@ interface StageConfig {
 - [x] 色差 (chromatic aberration) — *drop-shadow 偏移模拟*
 - [x] 残影/分身 (trail)
 - [x] Stage 5 彩虹漩涡 — *conic-gradient 背景*
-- [ ] 阶段 BGM — *字段已有，无音频加载/播放*
+- [x] 阶段 BGM — *Tone.js 程序化生成，8 轨道逐阶段叠加，BPM 跟随玩家速度，资源包 `bgm.json` 配置*
 - [x] SFX 变调 (`sfxPitch`) — *`playSyllable` 设置 `playbackRate`*
 
 ### 中断与重来
