@@ -105,11 +105,21 @@
           <option v-for="p in availablePacks" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
         <!-- 检测器切换 -->
-        <div class="detector-toggle" :class="{ disabled: state === 'playing' || state === 'ready' || state === 'paused' }">
-          <button class="toggle-btn" :class="{ active: detectorMode === 'ml' }"
-            :disabled="state === 'playing' || state === 'ready' || state === 'paused'" @click="switchDetector('ml')">CNN</button>
-          <button class="toggle-btn" :class="{ active: detectorMode === 'mfcc' }"
-            :disabled="state === 'playing' || state === 'ready' || state === 'paused'" @click="switchDetector('mfcc')">MFCC</button>
+        <div class="detector-toggle-wrap">
+          <div class="detector-toggle" :class="{ disabled: state === 'playing' || state === 'ready' || state === 'paused' }">
+            <button class="toggle-btn" :class="{ active: detectorMode === 'ml' }"
+              :disabled="state === 'playing' || state === 'ready' || state === 'paused'" @click="switchDetector('ml')">CNN</button>
+            <button class="toggle-btn" :class="{ active: detectorMode === 'mfcc' }"
+              :disabled="state === 'playing' || state === 'ready' || state === 'paused'" @click="switchDetector('mfcc')">MFCC</button>
+          </div>
+          <div class="detector-tip" tabindex="0"
+            @mouseenter="positionTip" @focus="positionTip">
+            <span class="tip-icon">?</span>
+            <div class="tip-popup" ref="tipPopupRef">
+              <p><strong>MFCC</strong>：延迟低，安静环境推荐</p>
+              <p><strong>CNN</strong>：抗噪更强，但延迟较高，安静时识别不如 MFCC</p>
+            </div>
+          </div>
         </div>
         <span class="pill" :class="isListening ? 'on' : 'off'">
           {{ isListening ? '🎤' : '🔇' }}
@@ -261,6 +271,21 @@ const detectorMode = ref<DetectorMode>('mfcc');
 const activeDetector = computed<VowelDetectorHookReturn>(() =>
   detectorMode.value === 'ml' ? mlDetector : mfccDetector
 );
+
+// tooltip 定位
+const tipPopupRef = ref<HTMLDivElement | null>(null);
+function positionTip(e: Event) {
+  const trigger = e.currentTarget as HTMLElement;
+  const popup = tipPopupRef.value;
+  if (!trigger || !popup) return;
+  const rect = trigger.getBoundingClientRect();
+  const pw = 220; // tip-popup width
+  // 向左展开，顶部对齐触发器底部
+  let left = rect.right - pw;
+  if (left < 8) left = 8;
+  popup.style.top = `${rect.bottom + 8}px`;
+  popup.style.left = `${left}px`;
+}
 
 // ==================== 游戏状态 ====================
 const game = useGameState();
@@ -472,6 +497,16 @@ function stopTrail() {
 const particleCanvas = ref<HTMLCanvasElement | null>(null);
 let particleRAF = 0;
 let particles: Array<{ x: number; y: number; vx: number; vy: number; size: number; color: string; life: number }> = [];
+let particleEnergy = 0;             // 当前粒子能量 (0-1)
+const PARTICLE_DECAY = 0.95;        // 每帧衰减
+const PARTICLE_THRESHOLD = 0.01;    // 低于此值停止生成
+
+/** 触发一次粒子爆发 */
+function triggerParticles() {
+  const cfg = stageConfig.value.background.particles;
+  if (!cfg.enabled || state.value !== 'playing') return;
+  particleEnergy = Math.min(1, particleEnergy + 0.5);
+}
 
 function startParticles() {
   const canvas = particleCanvas.value;
@@ -516,30 +551,34 @@ function startParticles() {
 
     if (!cfg.enabled || state.value !== 'playing') {
       particles = [];
+      particleEnergy = 0;
       particleRAF = requestAnimationFrame(tick);
       return;
     }
 
-    // spawn to target count
-    while (particles.length < cfg.count) {
+    // 能量衰减
+    if (particleEnergy > PARTICLE_THRESHOLD) {
+      particleEnergy *= PARTICLE_DECAY;
+    } else {
+      particleEnergy = 0;
+    }
+
+    // 根据能量比例生成新粒子（每帧最多生成 spawnBatch 个）
+    const targetActive = Math.floor(cfg.count * particleEnergy);
+    const spawnBatch = Math.min(targetActive - particles.length, Math.ceil(cfg.count * 0.15));
+    for (let s = 0; s < spawnBatch; s++) {
       particles.push(spawnParticle(w, h, cfg));
     }
-    if (particles.length > cfg.count) particles.length = cfg.count;
 
-    // update & draw
+    // 更新 & 绘制（已生成的粒子自然消亡，不会重生）
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       p.x += p.vx;
       p.y += p.vy;
-      p.life -= 0.005;
+      p.life -= 0.008;
 
       if (p.life <= 0 || p.x < -20 || p.x > w + 20 || p.y < -20 || p.y > h + 20) {
-        // respawn from center
-        const np = spawnParticle(w, h, cfg);
-        p.x = np.x; p.y = np.y;
-        p.vx = np.vx; p.vy = np.vy;
-        p.size = np.size; p.color = np.color;
-        p.life = np.life;
+        particles.splice(i, 1);
         continue;
       }
 
@@ -590,8 +629,9 @@ function setupReadyTrigger() {
     // 检查是否为序列第一个元音（允许模糊匹配）
     const expected = readyVowel.value as Vowel;
     if (vowel !== expected && !isFuzzyMatch(expected, vowel as Vowel)) return;
-    // 正式开始
+    // 正式开始，并立即推进序列（首音直接算分，不需要重复发）
     startGame();
+    game.processVowel(vowel as Vowel);
   };
 
   mlDetector.onVowelDetected((vowel, result) => onVowelForReady(vowel, result, 'ml'));
@@ -717,8 +757,9 @@ watch(
     // 播放新的期望音节（允许叠加）
     playExpectedSyllable(newIdx);
 
-    // 触发震动冲击
+    // 触发震动 & 粒子冲击
     triggerShake();
+    triggerParticles();
 
     // 记录最近发音时间（用于速度衰减）
     const now = performance.now();
@@ -975,7 +1016,7 @@ onUnmounted(() => {
   transition: opacity 0.5s ease;
 }
 
-.game-header, .game-main, .game-footer { position: relative; z-index: 3; }
+.game-header, .game-main, .game-footer { position: relative; }
 
 /* ==================== 残影 ==================== */
 .sprite-trail {
@@ -1061,6 +1102,10 @@ onUnmounted(() => {
 }
 .pack-select:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.detector-toggle-wrap {
+  display: flex; align-items: center; gap: 4px;
+  position: relative;
+}
 .detector-toggle {
   display: flex; background: rgba(255,255,255,0.06);
   border-radius: 6px; overflow: hidden;
@@ -1074,6 +1119,30 @@ onUnmounted(() => {
 }
 .toggle-btn.active { background: rgba(88,160,255,0.35); color: #fff; }
 .toggle-btn:disabled { cursor: not-allowed; }
+
+/* tooltip */
+.detector-tip {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.45); font-size: 10px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  cursor: help; flex-shrink: 0;
+  border: 1px solid rgba(255,255,255,0.15);
+}
+.tip-popup {
+  display: none;
+  position: fixed;
+  width: 220px; padding: 10px 12px;
+  background: #1c2028; border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  font-size: 12px; line-height: 1.5; color: #c9d1d9;
+  z-index: 200;
+  pointer-events: none;
+}
+.tip-popup p { margin: 0 0 4px; }
+.tip-popup p:last-child { margin-bottom: 0; }
+.detector-tip:hover .tip-popup,
+.detector-tip:focus .tip-popup { display: block; }
 
 .pill {
   padding: 4px 10px; border-radius: 999px; font-size: 12px;
