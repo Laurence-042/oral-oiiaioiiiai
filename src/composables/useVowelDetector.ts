@@ -303,50 +303,52 @@ export function useVowelDetector(config?: VowelDetectorConfig): VowelDetectorHoo
     }
     lastAnalysisTime = now;
 
-    // 获取频谱数据
-    const frequencyData = new Float32Array(analyserNode.frequencyBinCount);
-    analyserNode.getFloatFrequencyData(frequencyData);
-    
-    // 获取时域数据（用于调试）
-    const timeData = new Float32Array(analyserNode.fftSize);
-    analyserNode.getFloatTimeDomainData(timeData);
+    try {
+      // 获取频谱数据
+      const frequencyData = new Float32Array(analyserNode.frequencyBinCount);
+      analyserNode.getFloatFrequencyData(frequencyData);
+      
+      // 获取时域数据（用于调试）
+      const timeData = new Float32Array(analyserNode.fftSize);
+      analyserNode.getFloatTimeDomainData(timeData);
 
-    // 更新调试数据
-    debugData.value = { frequencyData, timeData };
+      // 更新调试数据
+      debugData.value = { frequencyData, timeData };
 
-    // 计算音量 (使用时域 RMS + 频域峰值的组合)
-    const rmsVolume = calculateVolumeFromTimeData(timeData);
-    const peakVolume = calculateVolumeFromFrequencyData(frequencyData);
-    // 取较大值作为有效音量
-    const volume = Math.max(rmsVolume, peakVolume);
+      // 计算音量 (使用时域 RMS + 频域峰值的组合)
+      const rmsVolume = calculateVolumeFromTimeData(timeData);
+      const peakVolume = calculateVolumeFromFrequencyData(frequencyData);
+      // 取较大值作为有效音量
+      const volume = Math.max(rmsVolume, peakVolume);
 
-    // 判断是否静音
-    if (volume < cfg.silenceThreshold) {
-      handleSilence(now, volume);
-    } else {
-      // 重置静音计时
-      silenceStartTime = null;
+      // 判断是否静音
+      if (volume < cfg.silenceThreshold) {
+        handleSilence(now, volume);
+      } else {
+        // 重置静音计时
+        silenceStartTime = null;
 
-      // 提取共振峰并分类元音
-      const formants = extractFormants(frequencyData);
-      const { vowel, confidence } = classifyVowel(formants.f1, formants.f2);
+        // 提取共振峰并分类元音
+        const formants = extractFormants(frequencyData);
+        const { vowel, confidence } = classifyVowel(formants.f1, formants.f2);
 
-      // 确定检测状态 - 降低置信度阈值，让识别更宽松
-      const status: DetectionStatus = 
-        vowel !== null && confidence > 0.4 ? 'detected' :
-        vowel !== null ? 'ambiguous' : 'noise';
+        // 确定检测状态 - 降低置信度阈值，让识别更宽松
+        const status: DetectionStatus = 
+          vowel !== null && confidence > 0.4 ? 'detected' :
+          vowel !== null ? 'ambiguous' : 'noise';
 
-      const result: VowelDetectionResult = {
-        vowel, status, confidence, formants, volume, timestamp: now
-      };
-      currentResult.value = result;
+        const result: VowelDetectionResult = {
+          vowel, status, confidence, formants, volume, timestamp: now
+        };
+        currentResult.value = result;
 
-      // 处理元音检测结果
-      if (status === 'detected' && vowel !== null) {
-        handleVowelDetected(vowel, result);
+        // 处理元音检测结果
+        if (status === 'detected' && vowel !== null) {
+          handleVowelDetected(vowel, result);
+        }
       }
-      // 注意：不在 ambiguous/noise 时设置 hadGapSinceLastEmit
-      // 只有真正的静音才算间隔
+    } catch (err) {
+      console.error('[VowelDetector] analyzeFrame error:', err);
     }
 
     animationFrameId = requestAnimationFrame(analyzeFrame);

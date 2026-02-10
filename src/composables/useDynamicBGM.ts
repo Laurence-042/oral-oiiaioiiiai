@@ -195,11 +195,16 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
       return;
     }
 
-    T.getTransport().stop();
-    T.getTransport().position = 0;
-
+    // 必须先停序列再停 Transport；反过来会导致 Tone.js assertRange 崩溃
     for (const track of activeTracks) {
-      track.sequence.stop();
+      try { track.sequence.stop(); } catch { /* sequence may already be stopped */ }
+    }
+
+    try {
+      T.getTransport().stop();
+      T.getTransport().position = 0;
+    } catch (err) {
+      console.warn('[BGM] Transport stop error:', err);
     }
 
     isPlaying.value = false;
@@ -230,7 +235,11 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
     const [min, max] = pendingConfig.bpmRange;
     const clamped = Math.max(min, Math.min(max, bpm));
     currentBPM.value = clamped;
-    T.getTransport().bpm.rampTo(clamped, 0.3);
+    try {
+      T.getTransport().bpm.rampTo(clamped, 0.3);
+    } catch (err) {
+      console.warn('[BGM] setBPM error:', err);
+    }
   }
 
   // ── 清理 ──
@@ -239,16 +248,23 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
   function disposeGraph() {
     if (!built) return;
 
+    // 先停序列，再停 Transport
+    for (const track of activeTracks) {
+      try { track.sequence.stop(); } catch { /* ignore */ }
+    }
+
     if (T) {
-      T.getTransport().stop();
-      T.getTransport().position = 0;
+      try {
+        T.getTransport().stop();
+        T.getTransport().position = 0;
+      } catch { /* ignore */ }
     }
 
     for (const track of activeTracks) {
-      track.sequence.dispose();
-      track.synth.dispose();
-      track.channel.dispose();
-      for (const eff of track.effects) eff.dispose();
+      try { track.sequence.dispose(); } catch { /* ignore */ }
+      try { track.synth.dispose(); } catch { /* ignore */ }
+      try { track.channel.dispose(); } catch { /* ignore */ }
+      for (const eff of track.effects) { try { eff.dispose(); } catch { /* ignore */ } }
     }
     activeTracks = [];
 
