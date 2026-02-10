@@ -3,6 +3,7 @@
   "name": "OIIA Cat",
   "description": "经典旋转猫 OIIAIOIIIAI",
   "sequence": ["U", "I", "I", "A", "I", "O", "U", "I", "I", "I", "A", "I"],
+  "bgm": "bgm.json",
   "syllables": [
     "001_U.wav",
     "002_I.wav",

@@ -196,6 +196,45 @@ export interface ParticleConfig {
   colors: string[];
 }
 
+// ==================== 动态 BGM 类型 ====================
+
+/** 合成器类型 */
+export type BGMSynthType = 'membrane' | 'metal' | 'noise' | 'am' | 'fm' | 'mono' | 'duo';
+
+/** 单个合成器通道配置 */
+export interface BGMTrackConfig {
+  /** 轨道标识 */
+  id: string;
+  /** 合成器类型 */
+  synth: BGMSynthType;
+  /** 合成器参数 (传给 Tone.js 构造器) */
+  options?: Record<string, unknown>;
+  /** 效果器链，如 ["distortion", "reverb"] */
+  effects?: Array<{ type: string; options?: Record<string, unknown> }>;
+  /** 音量 (dB) */
+  volume: number;
+  /** Tone.js Sequence pattern: 音符或 null (休止)，支持数组 (和弦) */
+  pattern: Array<string | string[] | null>;
+  /** 每拍细分 "4n" | "8n" | "16n" 等 */
+  subdivision: string;
+  /** 在哪些阶段启用 (1-5) */
+  stages: number[];
+  /** 是否随阶段动态改变音量 (可选) */
+  stageVolumes?: Record<number, number>;
+}
+
+/** 资源包 BGM 配置 (bgm.json) */
+export interface BGMConfig {
+  /** 基础 BPM (玩家无发音时的节奏) */
+  baseBPM: number;
+  /** BPM 范围限制 */
+  bpmRange: [number, number];
+  /** 主音量 (dB) */
+  masterVolume: number;
+  /** 全部轨道 */
+  tracks: BGMTrackConfig[];
+}
+
 /** 屏幕效果配置 */
 export interface ScreenEffectsConfig {
   /** 抖动强度 0-1 */

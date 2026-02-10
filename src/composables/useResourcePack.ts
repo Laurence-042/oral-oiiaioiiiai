@@ -1,5 +1,5 @@
 import { ref, computed, shallowRef } from 'vue';
-import type { Vowel } from '@/types/game';
+import type { Vowel, BGMConfig } from '@/types/game';
 
 // ==================== 类型定义 ====================
 
@@ -11,6 +11,7 @@ export interface ResourcePackManifest {
   sequence: Vowel[];
   syllables: string[];      // 文件名列表，如 "001_U.wav"
   chromaFrames: string[];    // 文件名列表，如 "chroma_001.png"
+  bgm?: string;              // BGM 配置文件名，如 "bgm.json"（可选）
 }
 
 /** 已加载的音节数据 */
@@ -29,6 +30,7 @@ export interface LoadedResourcePack {
   idleFrame: HTMLImageElement;          // 第一帧 (静止帧)
   animationFrames: HTMLImageElement[];  // 其余帧 (循环帧)
   totalSyllableDuration: number;        // 所有音节时长之和 (秒)
+  bgmConfig: BGMConfig | null;          // 动态 BGM 配置（可选）
 }
 
 /** 资源包摘要 (未加载，仅元信息) */
@@ -156,12 +158,24 @@ export function useResourcePack() {
       const idleFrame = allFrames[0];
       const animationFrames = allFrames.slice(1);
 
+      // 4. 加载 BGM 配置 (可选)
+      let bgmConfig: BGMConfig | null = null;
+      if (manifest.bgm) {
+        try {
+          const bgmRes = await fetch(`${basePath}/${manifest.bgm}`);
+          if (bgmRes.ok) bgmConfig = await bgmRes.json() as BGMConfig;
+        } catch (e) {
+          console.warn('Failed to load BGM config:', e);
+        }
+      }
+
       const pack: LoadedResourcePack = {
         manifest,
         syllables,
         idleFrame,
         animationFrames,
-        totalSyllableDuration
+        totalSyllableDuration,
+        bgmConfig
       };
 
       loadedPack.value = pack;

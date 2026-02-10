@@ -245,6 +245,7 @@ import { useVowelDetectorML } from '@/composables/useVowelDetectorML';
 import { useVowelDetector } from '@/composables/useVowelDetector';
 import { useGameState, connectVowelDetectorToGameState } from '@/composables/useGameState';
 import { useResourcePack } from '@/composables/useResourcePack';
+import { useDynamicBGM } from '@/composables/useDynamicBGM';
 import { getStageVisualConfig } from '@/config/stages';
 import { isFuzzyMatch } from '@/config/vowels';
 import type { InterruptReason, Vowel, VowelDetectorHookReturn, VowelDetectionResult } from '@/types/game';
@@ -299,6 +300,9 @@ const { stats, state, snapshot, startGame, pauseGame, resumeGame, interrupt, res
 
 const confPct = computed(() => Math.round((currentResult.value?.confidence ?? 0) * 100));
 const volPct = computed(() => Math.max(0, Math.min(100, (currentResult.value?.volume ?? -100) + 100)));
+
+// ==================== 动态 BGM ====================
+const bgm = useDynamicBGM();
 
 // ==================== 资源包 ====================
 const resPack = useResourcePack();
@@ -789,6 +793,10 @@ function updateSpeedRatio() {
   // 玩家越快 → ratio 越大 → 动画越快
   const ratio = avgSyllableDuration / avgPlayerInterval;
   rawSpeedRatio.value = Math.max(0.3, Math.min(4.0, ratio));
+
+  // 同步 BGM BPM
+  const bpm = 60000 / avgPlayerInterval;
+  bgm.setBPM(bpm);
 }
 
 // ==================== 中断原因 ====================
@@ -839,6 +847,7 @@ watch(state, (newState, oldState) => {
       startShake();
       startTrail();
       lastVowelInputTime = performance.now();
+      bgm.start();
     } else {
       // 全新开始
       startAnimation();
@@ -851,12 +860,16 @@ watch(state, (newState, oldState) => {
       playerIntervals = [];
       rawSpeedRatio.value = 1;
       animationSpeedRatio.value = 1;
+      // 启动 BGM
+      bgm.setStage(game.currentStage.value);
+      bgm.start();
     }
   }
   if (newState !== 'playing' && oldState === 'playing') {
     stopAnimation();
     stopShake();
     stopTrail();
+    bgm.stop();
   }
   if (newState === 'paused' && oldState === 'playing') {
     // 暂停：停止特效，不晕倒，不停检测器（倒计时恢复后继续用）
@@ -874,6 +887,11 @@ watch(state, (newState, oldState) => {
 
 game.onComboBreak((_combo, reason) => {
   lastInterruptReason.value = reason;
+});
+
+// BGM 阶段联动
+game.onStageChange((_from, to) => {
+  bgm.setStage(to);
 });
 
 // ==================== 用户操作 ====================
@@ -977,6 +995,19 @@ onMounted(async () => {
   await resPack.fetchAvailablePacks();
   try { await resPack.loadPack(currentPackId.value); } catch { /* handled */ }
   startParticles(); // 初始化 canvas（idle 时不渲染粒子）
+
+  // 初始化 BGM
+  const pack = loadedPack.value;
+  if (pack?.bgmConfig) {
+    bgm.init(pack.bgmConfig);
+  }
+});
+
+// 资源包切换时重新初始化 BGM
+watch(loadedPack, (pack) => {
+  if (pack?.bgmConfig) {
+    bgm.init(pack.bgmConfig);
+  }
 });
 
 onUnmounted(() => {
@@ -984,6 +1015,7 @@ onUnmounted(() => {
   stopShake();
   stopParticles();
   stopTrail();
+  bgm.dispose();
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = 0; }
   resPack.dispose();
 });

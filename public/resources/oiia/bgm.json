@@ -1,0 +1,141 @@
+{
+  "baseBPM": 120,
+  "bpmRange": [60, 240],
+  "masterVolume": -8,
+  "tracks": [
+    {
+      "id": "kick",
+      "synth": "membrane",
+      "options": {
+        "pitchDecay": 0.05,
+        "octaves": 6,
+        "envelope": { "attack": 0.001, "decay": 0.2, "sustain": 0, "release": 0.4 }
+      },
+      "volume": -6,
+      "pattern": ["C1", null, null, null],
+      "subdivision": "4n",
+      "stages": [1, 2, 3, 4, 5]
+    },
+    {
+      "id": "hihat",
+      "synth": "metal",
+      "options": {
+        "frequency": 400,
+        "envelope": { "attack": 0.001, "decay": 0.05, "release": 0.01 },
+        "harmonicity": 5.1,
+        "modulationIndex": 40,
+        "resonance": 4000,
+        "octaves": 1.5
+      },
+      "volume": -18,
+      "pattern": [null, "C4", null, "C4"],
+      "subdivision": "4n",
+      "stages": [2, 3, 4, 5],
+      "stageVolumes": { "2": -18, "3": -14, "4": -12, "5": -10 }
+    },
+    {
+      "id": "snare",
+      "synth": "noise",
+      "options": {
+        "noise": { "type": "white" },
+        "envelope": { "attack": 0.001, "decay": 0.12, "sustain": 0, "release": 0.05 }
+      },
+      "volume": -14,
+      "pattern": [null, null, "C4", null],
+      "subdivision": "4n",
+      "stages": [3, 4, 5],
+      "stageVolumes": { "3": -16, "4": -12, "5": -10 }
+    },
+    {
+      "id": "bass",
+      "synth": "mono",
+      "options": {
+        "oscillator": { "type": "sawtooth" },
+        "filter": { "Q": 3, "type": "lowpass", "frequency": 600 },
+        "envelope": { "attack": 0.01, "decay": 0.2, "sustain": 0.4, "release": 0.2 },
+        "filterEnvelope": { "attack": 0.01, "decay": 0.15, "sustain": 0.3, "release": 0.2, "baseFrequency": 80, "octaves": 2.5 }
+      },
+      "volume": -10,
+      "pattern": ["C2", null, "C2", null, "D#2", null, "D#2", null],
+      "subdivision": "8n",
+      "stages": [2, 3, 4, 5],
+      "stageVolumes": { "2": -16, "3": -12, "4": -10, "5": -8 }
+    },
+    {
+      "id": "arp",
+      "synth": "fm",
+      "options": {
+        "harmonicity": 3,
+        "modulationIndex": 10,
+        "envelope": { "attack": 0.01, "decay": 0.15, "sustain": 0.1, "release": 0.2 },
+        "modulation": { "type": "square" },
+        "modulationEnvelope": { "attack": 0.01, "decay": 0.1, "sustain": 0.2, "release": 0.2 }
+      },
+      "effects": [
+        { "type": "delay", "options": { "delayTime": "8n.", "feedback": 0.3, "wet": 0.2 } }
+      ],
+      "volume": -18,
+      "pattern": ["C4", "E4", "G4", "C5", "G4", "E4", "C4", "G3"],
+      "subdivision": "8n",
+      "stages": [3, 4, 5],
+      "stageVolumes": { "3": -20, "4": -16, "5": -12 }
+    },
+    {
+      "id": "pad",
+      "synth": "am",
+      "options": {
+        "harmonicity": 2,
+        "oscillator": { "type": "sine" },
+        "envelope": { "attack": 0.8, "decay": 0.3, "sustain": 0.7, "release": 1.5 },
+        "modulation": { "type": "triangle" },
+        "modulationEnvelope": { "attack": 0.5, "decay": 0.2, "sustain": 0.5, "release": 1 }
+      },
+      "effects": [
+        { "type": "reverb", "options": { "decay": 3, "wet": 0.5 } }
+      ],
+      "volume": -20,
+      "pattern": [["C3", "E3", "G3"], null, null, null, ["D#3", "G3", "A#3"], null, null, null],
+      "subdivision": "4n",
+      "stages": [4, 5],
+      "stageVolumes": { "4": -22, "5": -16 }
+    },
+    {
+      "id": "lead",
+      "synth": "duo",
+      "options": {
+        "harmonicity": 1.5,
+        "voice0": {
+          "oscillator": { "type": "sawtooth" },
+          "envelope": { "attack": 0.01, "decay": 0.3, "sustain": 0.3, "release": 0.3 }
+        },
+        "voice1": {
+          "oscillator": { "type": "square" },
+          "envelope": { "attack": 0.01, "decay": 0.3, "sustain": 0.3, "release": 0.3 }
+        }
+      },
+      "effects": [
+        { "type": "distortion", "options": { "distortion": 0.4, "wet": 0.3 } },
+        { "type": "delay", "options": { "delayTime": "16n", "feedback": 0.2, "wet": 0.15 } }
+      ],
+      "volume": -16,
+      "pattern": ["C5", null, "G4", null, "A#4", null, "G4", null, "C5", null, "D5", null, "D#5", "D5", "C5", null],
+      "subdivision": "16n",
+      "stages": [5],
+      "stageVolumes": { "5": -14 }
+    },
+    {
+      "id": "sub-kick",
+      "synth": "membrane",
+      "options": {
+        "pitchDecay": 0.08,
+        "octaves": 8,
+        "envelope": { "attack": 0.001, "decay": 0.3, "sustain": 0, "release": 0.5 }
+      },
+      "volume": -10,
+      "pattern": ["C0", null, null, null, null, null, "C0", null],
+      "subdivision": "8n",
+      "stages": [4, 5],
+      "stageVolumes": { "4": -14, "5": -10 }
+    }
+  ]
+}
