@@ -15,37 +15,66 @@
     <!-- ==================== 结算遮罩 ==================== -->
     <Transition name="overlay">
       <div v-if="state === 'interrupted'" class="result-overlay" @click.self="handleRestart">
-        <div class="result-card">
-          <div class="result-icon">{{ interruptIcon }}</div>
-          <h2 class="result-title">{{ interruptTitle }}</h2>
-          <p class="result-reason">{{ interruptReasonText }}</p>
+        <!-- 牌堆：分享图片 / 视频预览倾斜在卡片后面 -->
+        <div class="result-stack">
+          <!-- 分享图预览（可长按/右键保存） -->
+          <img
+            v-if="shareImageUrl"
+            :src="shareImageUrl"
+            class="stack-card stack-img"
+            alt="分享图片 — 长按或右键保存"
+            draggable="true"
+          />
+          <!-- 视频预览（可长按/右键保存） -->
+          <video
+            v-if="shareVideoUrl"
+            :src="shareVideoUrl"
+            class="stack-card stack-video"
+            muted
+            loop
+            autoplay
+            playsinline
+          ></video>
 
-          <div class="result-stats">
-            <div class="result-stat main">
-              <span class="result-label">最终得分</span>
-              <span class="result-value">{{ snapshot?.score ?? stats.score }}</span>
-            </div>
-            <div class="result-stat">
-              <span class="result-label">最高连击</span>
-              <span class="result-value">{{ snapshot?.maxCombo ?? stats.maxCombo }}x</span>
-            </div>
-            <div class="result-stat">
-              <span class="result-label">到达阶段</span>
-              <span class="result-value">{{ snapshot?.stageName ?? stats.stageName }}</span>
-            </div>
-            <div class="result-stat">
-              <span class="result-label">完美循环</span>
-              <span class="result-value">{{ snapshot?.perfectCycles ?? stats.perfectCycles }}</span>
-            </div>
-            <div class="result-stat">
-              <span class="result-label">持续时间</span>
-              <span class="result-value">{{ formattedDuration }}</span>
-            </div>
-          </div>
+          <!-- 主结算卡片 -->
+          <div class="result-card">
+            <div class="result-icon">{{ interruptIcon }}</div>
+            <h2 class="result-title">{{ interruptTitle }}</h2>
+            <p class="result-subtitle">{{ interruptSubtitle }}</p>
+            <p class="result-reason">{{ interruptReasonText }}</p>
 
-          <div class="result-actions">
-            <button class="btn primary large" @click="handleRestart">🔄 再来一次</button>
-            <button class="btn ghost" @click="handleBackToIdle">返回首页</button>
+            <div class="result-stats">
+              <div class="result-stat main">
+                <span class="result-label">最终得分</span>
+                <span class="result-value">{{ snapshot?.score ?? stats.score }}</span>
+              </div>
+              <div class="result-stat">
+                <span class="result-label">最高连击</span>
+                <span class="result-value">{{ snapshot?.maxCombo ?? stats.maxCombo }}x</span>
+              </div>
+              <div class="result-stat">
+                <span class="result-label">到达阶段</span>
+                <span class="result-value">{{ snapshot?.stageName ?? stats.stageName }}</span>
+              </div>
+              <div class="result-stat">
+                <span class="result-label">完美循环</span>
+                <span class="result-value">{{ snapshot?.perfectCycles ?? stats.perfectCycles }}</span>
+              </div>
+              <div class="result-stat">
+                <span class="result-label">持续时间</span>
+                <span class="result-value">{{ formattedDuration }}</span>
+              </div>
+            </div>
+
+            <!-- 分享提示 -->
+            <p class="share-hint" v-if="shareImageUrl || shareVideoUrl">
+              👆 长按或右键点击后面的卡片保存分享
+            </p>
+
+            <div class="result-actions">
+              <button class="btn primary large" @click="handleRestart">🔄 再来一次</button>
+              <button class="btn ghost" @click="handleBackToIdle">返回首页</button>
+            </div>
           </div>
         </div>
       </div>
@@ -246,6 +275,8 @@ import { useVowelDetector } from '@/composables/useVowelDetector';
 import { useGameState, connectVowelDetectorToGameState } from '@/composables/useGameState';
 import { useResourcePack } from '@/composables/useResourcePack';
 import { useDynamicBGM } from '@/composables/useDynamicBGM';
+import { useShareCapture, generateCopywriting } from '@/composables/useShareCapture';
+import { useVideoRecorder } from '@/composables/useVideoRecorder';
 import { getStageVisualConfig } from '@/config/stages';
 import { isFuzzyMatch } from '@/config/vowels';
 import type { InterruptReason, Vowel, VowelDetectorHookReturn, VowelDetectionResult } from '@/types/game';
@@ -303,6 +334,12 @@ const volPct = computed(() => Math.max(0, Math.min(100, (currentResult.value?.vo
 
 // ==================== 动态 BGM ====================
 const bgm = useDynamicBGM();
+
+// ==================== 分享系统 ====================
+const shareCapture = useShareCapture();
+const videoRecorder = useVideoRecorder();
+const shareImageUrl = ref<string | null>(null);
+const shareVideoUrl = ref<string | null>(null);
 
 // ==================== 资源包 ====================
 const resPack = useResourcePack();
@@ -799,8 +836,14 @@ function updateSpeedRatio() {
   bgm.setBPM(bpm);
 }
 
-// ==================== 中断原因 ====================
+// ==================== 中断文案 ====================
 const lastInterruptReason = ref<InterruptReason | null>(null);
+
+const interruptCopy = computed(() => {
+  const s = snapshot.value;
+  if (!s) return { title: '游戏结束', subtitle: '' };
+  return generateCopywriting(s);
+});
 
 const interruptIcon = computed(() => {
   const s = snapshot.value;
@@ -808,17 +851,11 @@ const interruptIcon = computed(() => {
   if (s.perfectCycles >= 3) return '🏆';
   if (s.stage >= 4) return '🔥';
   if (s.stage >= 2) return '😸';
-  return '😿';
+  return '🐱';
 });
 
-const interruptTitle = computed(() => {
-  const s = snapshot.value;
-  if (!s) return '游戏结束';
-  if (s.perfectCycles >= 3) return '太强了！';
-  if (s.stage >= 4) return '非常厉害！';
-  if (s.stage >= 2) return '不错的表现！';
-  return '再接再厉！';
-});
+const interruptTitle = computed(() => interruptCopy.value.title);
+const interruptSubtitle = computed(() => interruptCopy.value.subtitle);
 
 const interruptReasonText = computed(() => {
   switch (lastInterruptReason.value) {
@@ -863,6 +900,17 @@ watch(state, (newState, oldState) => {
       // 启动 BGM
       bgm.setStage(game.currentStage.value);
       bgm.start();
+
+      // 启动视频录制（自动录制最后 30 秒）
+      if (videoRecorder.isSupported.value) {
+        const gameEl = document.querySelector('.game-view') as HTMLElement;
+        if (gameEl) {
+          // 清理上一局的分享素材
+          if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
+          if (shareVideoUrl.value) { URL.revokeObjectURL(shareVideoUrl.value); shareVideoUrl.value = null; }
+          videoRecorder.startRecording(gameEl, { maxDuration: 30000 });
+        }
+      }
     }
   }
   if (newState !== 'playing' && oldState === 'playing') {
@@ -870,6 +918,16 @@ watch(state, (newState, oldState) => {
     stopShake();
     stopTrail();
     bgm.stop();
+
+    // 停止视频录制 → 生成可预览的 URL
+    if (videoRecorder.isRecording.value) {
+      videoRecorder.stopRecording().then((blob) => {
+        if (blob) {
+          if (shareVideoUrl.value) URL.revokeObjectURL(shareVideoUrl.value);
+          shareVideoUrl.value = URL.createObjectURL(blob);
+        }
+      });
+    }
   }
   if (newState === 'paused' && oldState === 'playing') {
     // 暂停：停止特效，不晕倒，不停检测器（倒计时恢复后继续用）
@@ -882,6 +940,17 @@ watch(state, (newState, oldState) => {
     // 清理倒计时（从 handleQuitFromPause 路径）
     if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = 0; }
     countdownValue.value = 0;
+
+    // 自动生成分享图片
+    const snap = snapshot.value;
+    if (snap) {
+      shareCapture.generateShareImage(snap).then((blob) => {
+        if (blob) {
+          if (shareImageUrl.value) URL.revokeObjectURL(shareImageUrl.value);
+          shareImageUrl.value = URL.createObjectURL(blob);
+        }
+      });
+    }
   }
 });
 
@@ -969,6 +1038,9 @@ const handleQuitFromPause = () => {
 
 const handleRestart = async () => {
   isFainting.value = false;
+  // 清理分享素材
+  if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
+  if (shareVideoUrl.value) { URL.revokeObjectURL(shareVideoUrl.value); shareVideoUrl.value = null; }
   resetGame();
   try {
     activeDetector.value.stop();
@@ -983,6 +1055,8 @@ const handleRestart = async () => {
 
 const handleBackToIdle = () => {
   isFainting.value = false;
+  if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
+  if (shareVideoUrl.value) { URL.revokeObjectURL(shareVideoUrl.value); shareVideoUrl.value = null; }
   activeDetector.value.stop();
   resetGame();
   lastInterruptReason.value = null;
@@ -1016,6 +1090,9 @@ onUnmounted(() => {
   stopParticles();
   stopTrail();
   bgm.dispose();
+  videoRecorder.dispose();
+  if (shareImageUrl.value) URL.revokeObjectURL(shareImageUrl.value);
+  if (shareVideoUrl.value) URL.revokeObjectURL(shareVideoUrl.value);
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = 0; }
   resPack.dispose();
 });
@@ -1426,23 +1503,59 @@ onUnmounted(() => {
   display: flex; align-items: center; justify-content: center;
   background: rgba(0,0,0,0.75); backdrop-filter: blur(10px);
 }
+.result-stack {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  max-width: 440px; width: calc(100% - 32px);
+}
+/* 牌堆：倾斜在主卡片后面的分享素材 */
+.stack-card {
+  position: absolute;
+  border-radius: 16px;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.6);
+  pointer-events: auto;
+  transition: transform 0.5s cubic-bezier(0.16,1,0.3,1), opacity 0.4s ease;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.stack-img {
+  width: 180px; height: auto; max-height: 240px;
+  transform: rotate(-8deg) translate(-110%, -10%);
+  z-index: -1;
+}
+.stack-video {
+  width: 160px; height: auto; max-height: 200px;
+  transform: rotate(7deg) translate(110%, -8%);
+  z-index: -1;
+}
+.stack-card:hover {
+  z-index: 10;
+  box-shadow: 0 16px 56px rgba(88,160,255,0.3);
+}
+.stack-img:hover { transform: rotate(-3deg) translate(-110%, -14%) scale(1.08); }
+.stack-video:hover { transform: rotate(3deg) translate(110%, -12%) scale(1.08); }
+
 .result-card {
   background: linear-gradient(145deg, rgba(22,27,34,0.97), rgba(13,17,23,0.99));
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 24px; padding: 36px 32px;
-  max-width: 400px; width: calc(100% - 32px);
+  width: 100%;
   text-align: center;
   box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+  position: relative; z-index: 1;
 }
 .result-icon { font-size: 52px; margin-bottom: 6px; }
 .result-title {
   font-size: 26px; font-weight: 700;
   letter-spacing: 2px; margin-bottom: 4px;
 }
-.result-reason { font-size: 13px; color: #8b949e; margin-bottom: 24px; }
+.result-subtitle {
+  font-size: 14px; color: #8b949e; margin-bottom: 2px;
+}
+.result-reason { font-size: 12px; color: #6e7681; margin-bottom: 20px; }
 .result-stats {
   display: grid; grid-template-columns: 1fr 1fr;
-  gap: 12px; margin-bottom: 28px;
+  gap: 12px; margin-bottom: 20px;
 }
 .result-stat {
   background: rgba(255,255,255,0.04);
@@ -1460,7 +1573,22 @@ onUnmounted(() => {
 }
 .result-value { display: block; font-size: 20px; font-weight: 700; }
 .result-stat.main .result-value { font-size: 32px; }
+
+.share-hint {
+  font-size: 12px; color: #6e7681; margin-bottom: 16px;
+  animation: hint-fade 3s ease-in-out infinite;
+}
+@keyframes hint-fade {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
 .result-actions { display: flex; flex-direction: column; gap: 10px; }
+
+.btn.accent {
+  background: linear-gradient(135deg, #f78166, #f0883e);
+  color: #0d1117; font-weight: 700;
+}
 
 /* ==================== 预备遮罩 ==================== */
 .ready-overlay {
@@ -1559,10 +1687,15 @@ onUnmounted(() => {
 
 /* ==================== 过渡 ==================== */
 .overlay-enter-active { transition: opacity 0.3s ease; }
+.overlay-enter-active .result-stack,
 .overlay-enter-active .result-card {
   transition: transform 0.35s cubic-bezier(0.16,1,0.3,1), opacity 0.3s ease;
 }
+.overlay-enter-active .stack-card {
+  transition: transform 0.5s cubic-bezier(0.16,1,0.3,1) 0.15s, opacity 0.4s ease 0.1s;
+}
 .overlay-leave-active { transition: opacity 0.2s ease; }
+.overlay-leave-active .result-stack,
 .overlay-leave-active .result-card {
   transition: transform 0.2s ease, opacity 0.2s ease;
 }
@@ -1570,6 +1703,7 @@ onUnmounted(() => {
 .overlay-enter-from .result-card {
   opacity: 0; transform: scale(0.92) translateY(20px);
 }
+.overlay-enter-from .stack-card { opacity: 0; }
 .overlay-leave-to { opacity: 0; }
 .overlay-leave-to .result-card {
   opacity: 0; transform: scale(0.96) translateY(-10px);
@@ -1594,6 +1728,21 @@ onUnmounted(() => {
 .mobile .detect-vowel {
   width: 48px; height: 48px; font-size: 24px; border-radius: 12px;
 }
+
+/* 移动端：牌堆改为卡片下方水平排列 */
+.mobile .stack-img {
+  width: 120px;
+  transform: rotate(-6deg) translate(-90%, -5%);
+}
+.mobile .stack-video {
+  width: 110px;
+  transform: rotate(5deg) translate(90%, -3%);
+}
+.mobile .result-card { padding: 28px 20px; }
+.mobile .result-title { font-size: 22px; }
+.mobile .result-stats { gap: 8px; margin-bottom: 16px; }
+.mobile .result-stat { padding: 10px 8px; }
+.mobile .share-hint { font-size: 11px; }
 
 .mobile .game-footer { padding: 10px 14px 16px; }
 .mobile .btn { padding: 10px 16px; font-size: 13px; }

@@ -1,16 +1,18 @@
 import { ref, type Ref } from 'vue';
-import * as Tone from 'tone';
 import type { BGMConfig, BGMTrackConfig, BGMSynthType, Stage } from '@/types/game';
 
 // ==================== 类型 ====================
+// import type 仅引入类型，零运行时开销，不会触发 Tone.js 模块初始化
+import type * as ToneNS from 'tone';
 
+/** 内部轨道实例 */
 interface ActiveTrack {
   id: string;
   config: BGMTrackConfig;
-  synth: Tone.MembraneSynth | Tone.MetalSynth | Tone.NoiseSynth | Tone.AMSynth | Tone.FMSynth | Tone.MonoSynth | Tone.DuoSynth;
-  channel: Tone.Channel;
-  sequence: Tone.Sequence;
-  effects: Tone.ToneAudioNode[];
+  synth: ToneNS.MembraneSynth | ToneNS.MetalSynth | ToneNS.NoiseSynth | ToneNS.AMSynth | ToneNS.FMSynth | ToneNS.MonoSynth | ToneNS.DuoSynth;
+  channel: ToneNS.Channel;
+  sequence: ToneNS.Sequence;
+  effects: ToneNS.ToneAudioNode[];
 }
 
 export interface UseDynamicBGMReturn {
@@ -18,11 +20,11 @@ export interface UseDynamicBGMReturn {
   isPlaying: Ref<boolean>;
   /** 当前 BPM */
   currentBPM: Ref<number>;
-  /** 用 BGM 配置初始化 */
+  /** 用 BGM 配置初始化（仅保存配置，不创建音频节点） */
   init: (config: BGMConfig) => void;
-  /** 开始播放 */
+  /** 开始播放（首次调用时才加载 Tone.js 并构建音频图） */
   start: () => Promise<void>;
-  /** 停止并清理 */
+  /** 停止播放 */
   stop: () => void;
   /** 更新阶段（启用/禁用轨道） */
   setStage: (stage: Stage) => void;
@@ -32,86 +34,92 @@ export interface UseDynamicBGMReturn {
   dispose: () => void;
 }
 
-// ==================== 合成器工厂 ====================
-
-function createSynth(type: BGMSynthType, options?: Record<string, unknown>): ActiveTrack['synth'] {
-  switch (type) {
-    case 'membrane': return new Tone.MembraneSynth(options as Partial<Tone.MembraneSynthOptions>);
-    case 'metal':    return new Tone.MetalSynth(options as Partial<Tone.MetalSynthOptions>);
-    case 'noise':    return new Tone.NoiseSynth(options as Partial<Tone.NoiseSynthOptions>);
-    case 'am':       return new Tone.AMSynth(options as Partial<Tone.AMSynthOptions>);
-    case 'fm':       return new Tone.FMSynth(options as Partial<Tone.FMSynthOptions>);
-    case 'mono':     return new Tone.MonoSynth(options as Partial<Tone.MonoSynthOptions>);
-    case 'duo':      return new Tone.DuoSynth(options as Partial<Tone.DuoSynthOptions>);
-    default:         return new Tone.MonoSynth(options as Partial<Tone.MonoSynthOptions>);
-  }
-}
-
-function createEffect(type: string, options?: Record<string, unknown>): Tone.ToneAudioNode | null {
-  switch (type) {
-    case 'distortion': return new Tone.Distortion(options as Partial<Tone.DistortionOptions>);
-    case 'reverb':     return new Tone.Reverb(options as Partial<Tone.ReverbOptions>);
-    case 'delay':      return new Tone.FeedbackDelay(options as Partial<Tone.FeedbackDelayOptions>);
-    case 'chorus':     return new Tone.Chorus(options as Partial<Tone.ChorusOptions>);
-    case 'filter':     return new Tone.Filter(options as Partial<Tone.FilterOptions>);
-    case 'phaser':     return new Tone.Phaser(options as Partial<Tone.PhaserOptions>);
-    case 'autoFilter': return new Tone.AutoFilter(options as Partial<Tone.AutoFilterOptions>);
-    case 'compressor': return new Tone.Compressor(options as Partial<Tone.CompressorOptions>);
-    case 'eq3':        return new Tone.EQ3(options as ConstructorParameters<typeof Tone.EQ3>[0]);
-    default:
-      console.warn(`Unknown effect type: ${type}`);
-      return null;
-  }
-}
-
 // ==================== Composable ====================
 
 export function useDynamicBGM(): UseDynamicBGMReturn {
   const isPlaying = ref(false);
   const currentBPM = ref(120);
 
-  let config: BGMConfig | null = null;
+  /** 保存的 BGM 配置（init 时写入，start 时消费） */
+  let pendingConfig: BGMConfig | null = null;
+  /** 运行时 Tone 模块引用（动态加载后缓存） */
+  let T: typeof ToneNS | null = null;
+
   let activeTracks: ActiveTrack[] = [];
-  let masterChannel: Tone.Channel | null = null;
+  let masterChannel: ToneNS.Channel | null = null;
   let currentStage: Stage = 1;
-  let initialized = false;
+  let built = false;
+
+  // ── 合成器 / 效果器工厂 ──
+
+  function createSynth(t: typeof ToneNS, type: BGMSynthType, options?: Record<string, unknown>): ActiveTrack['synth'] {
+    switch (type) {
+      case 'membrane': return new t.MembraneSynth(options as Partial<ToneNS.MembraneSynthOptions>);
+      case 'metal':    return new t.MetalSynth(options as Partial<ToneNS.MetalSynthOptions>);
+      case 'noise':    return new t.NoiseSynth(options as Partial<ToneNS.NoiseSynthOptions>);
+      case 'am':       return new t.AMSynth(options as Partial<ToneNS.AMSynthOptions>);
+      case 'fm':       return new t.FMSynth(options as Partial<ToneNS.FMSynthOptions>);
+      case 'mono':     return new t.MonoSynth(options as Partial<ToneNS.MonoSynthOptions>);
+      case 'duo':      return new t.DuoSynth(options as Partial<ToneNS.DuoSynthOptions>);
+      default:         return new t.MonoSynth(options as Partial<ToneNS.MonoSynthOptions>);
+    }
+  }
+
+  function createEffect(t: typeof ToneNS, type: string, options?: Record<string, unknown>): ToneNS.ToneAudioNode | null {
+    switch (type) {
+      case 'distortion': return new t.Distortion(options as Partial<ToneNS.DistortionOptions>);
+      case 'reverb':     return new t.Reverb(options as Partial<ToneNS.ReverbOptions>);
+      case 'delay':      return new t.FeedbackDelay(options as Partial<ToneNS.FeedbackDelayOptions>);
+      case 'chorus':     return new t.Chorus(options as Partial<ToneNS.ChorusOptions>);
+      case 'filter':     return new t.Filter(options as Partial<ToneNS.FilterOptions>);
+      case 'phaser':     return new t.Phaser(options as Partial<ToneNS.PhaserOptions>);
+      case 'autoFilter': return new t.AutoFilter(options as Partial<ToneNS.AutoFilterOptions>);
+      case 'compressor': return new t.Compressor(options as Partial<ToneNS.CompressorOptions>);
+      case 'eq3':        return new t.EQ3(options as ConstructorParameters<typeof t.EQ3>[0]);
+      default:
+        console.warn(`Unknown effect type: ${type}`);
+        return null;
+    }
+  }
 
   // ── 初始化 ──
 
   function init(bgmConfig: BGMConfig) {
-    // 如果已有旧配置，先清理
-    if (initialized) dispose();
+    // 如果已有旧音频图，先清理
+    if (built) disposeGraph();
 
-    config = bgmConfig;
+    // 仅保存配置，不创建任何 Tone.js 节点
+    pendingConfig = bgmConfig;
     currentBPM.value = bgmConfig.baseBPM;
-    Tone.getTransport().bpm.value = bgmConfig.baseBPM;
-
-    // 主音量通道
-    masterChannel = new Tone.Channel(bgmConfig.masterVolume).toDestination();
-
-    // 构建所有轨道（初始静音，根据阶段启用）
-    for (const trackCfg of bgmConfig.tracks) {
-      const track = buildTrack(trackCfg);
-      activeTracks.push(track);
-    }
-
-    initialized = true;
   }
 
-  function buildTrack(trackCfg: BGMTrackConfig): ActiveTrack {
-    const synth = createSynth(trackCfg.synth, trackCfg.options);
-    const channel = new Tone.Channel(trackCfg.volume);
+  /** 构建完整音频图（必须在 Tone.start() 之后调用） */
+  function buildAllTracks(t: typeof ToneNS, config: BGMConfig) {
+    t.getTransport().bpm.value = config.baseBPM;
+
+    masterChannel = new t.Channel(config.masterVolume).toDestination();
+
+    for (const trackCfg of config.tracks) {
+      activeTracks.push(buildTrack(t, trackCfg));
+    }
+
+    built = true;
+  }
+
+  function buildTrack(t: typeof ToneNS, trackCfg: BGMTrackConfig): ActiveTrack {
+    const synth = createSynth(t, trackCfg.synth, trackCfg.options);
+    const channel = new t.Channel(trackCfg.volume);
 
     // 效果器链
-    const effects: Tone.ToneAudioNode[] = [];
+    const effects: ToneNS.ToneAudioNode[] = [];
     if (trackCfg.effects) {
       for (const eff of trackCfg.effects) {
-        const node = createEffect(eff.type, eff.options);
+        const node = createEffect(t, eff.type, eff.options);
         if (node) effects.push(node);
       }
     }
 
-    // 连接链: synth → effects → channel → master
+    // 连接: synth → effects → channel → master
     if (effects.length > 0) {
       synth.connect(effects[0]);
       for (let i = 0; i < effects.length - 1; i++) {
@@ -127,18 +135,18 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
     channel.mute = true;
 
     // 创建序列
-    const sequence = new Tone.Sequence(
+    const sequence = new t.Sequence(
       (time, note) => {
         if (note === null) return;
-        if (synth instanceof Tone.NoiseSynth) {
+        if (synth instanceof t.NoiseSynth) {
           synth.triggerAttackRelease(
-            Tone.Time(trackCfg.subdivision).toSeconds() * 0.8,
+            t.Time(trackCfg.subdivision).toSeconds() * 0.8,
             time
           );
         } else {
-          (synth as Tone.MonoSynth).triggerAttackRelease(
+          (synth as ToneNS.MonoSynth).triggerAttackRelease(
             note,
-            Tone.Time(trackCfg.subdivision).toSeconds() * 0.8,
+            t.Time(trackCfg.subdivision).toSeconds() * 0.8,
             time
           );
         }
@@ -153,10 +161,21 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
   // ── 控制 ──
 
   async function start() {
-    if (!initialized || !config) return;
+    if (!pendingConfig && !built) return;
 
-    // Tone.js 需要用户交互后启动
-    await Tone.start();
+    // 动态加载 Tone.js —— 只在用户交互后的 start() 里执行
+    // 模块加载后 Tone 会初始化 AudioContext，此时用户手势有效
+    if (!T) {
+      T = await import('tone');
+    }
+
+    // 启动 AudioContext（保证 resumed）
+    await T.start();
+
+    // 首次 / 换配置后构建音频图
+    if (!built && pendingConfig) {
+      buildAllTracks(T, pendingConfig);
+    }
 
     // 启动所有序列
     for (const track of activeTracks) {
@@ -166,15 +185,18 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
     // 根据当前阶段设置轨道可见性
     applyStage(currentStage);
 
-    Tone.getTransport().start();
+    T.getTransport().start();
     isPlaying.value = true;
   }
 
   function stop() {
-    if (!initialized) return;
+    if (!built || !T) {
+      isPlaying.value = false;
+      return;
+    }
 
-    Tone.getTransport().stop();
-    Tone.getTransport().position = 0;
+    T.getTransport().stop();
+    T.getTransport().position = 0;
 
     for (const track of activeTracks) {
       track.sequence.stop();
@@ -195,7 +217,6 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
       const enabled = track.config.stages.includes(stage);
       track.channel.mute = !enabled;
 
-      // 阶段自定义音量
       if (enabled && track.config.stageVolumes && stage in track.config.stageVolumes) {
         track.channel.volume.rampTo(track.config.stageVolumes[stage], 0.5);
       } else if (enabled) {
@@ -205,18 +226,23 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
   }
 
   function setBPM(bpm: number) {
-    if (!config) return;
-    const [min, max] = config.bpmRange;
+    if (!pendingConfig || !T) return;
+    const [min, max] = pendingConfig.bpmRange;
     const clamped = Math.max(min, Math.min(max, bpm));
     currentBPM.value = clamped;
-    // 平滑过渡 BPM
-    Tone.getTransport().bpm.rampTo(clamped, 0.3);
+    T.getTransport().bpm.rampTo(clamped, 0.3);
   }
 
   // ── 清理 ──
 
-  function dispose() {
-    stop();
+  /** 销毁音频图但保留配置 & Tone 引用 */
+  function disposeGraph() {
+    if (!built) return;
+
+    if (T) {
+      T.getTransport().stop();
+      T.getTransport().position = 0;
+    }
 
     for (const track of activeTracks) {
       track.sequence.dispose();
@@ -231,8 +257,14 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
       masterChannel = null;
     }
 
-    config = null;
-    initialized = false;
+    built = false;
+    isPlaying.value = false;
+  }
+
+  /** 完全销毁（清理音频图 + 清空配置） */
+  function dispose() {
+    disposeGraph();
+    pendingConfig = null;
   }
 
   return {
