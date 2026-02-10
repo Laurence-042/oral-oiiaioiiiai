@@ -49,6 +49,8 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
   let masterChannel: ToneNS.Channel | null = null;
   let currentStage: Stage = 1;
   let built = false;
+  /** start() 正在执行中，防止重入竞态 */
+  let starting = false;
 
   // ── 合成器 / 效果器工厂 ──
 
@@ -159,49 +161,110 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
   }
 
   // ── 控制 ──
+  // 不使用 Tone.js 的 rampTo / cancelScheduledValues —— 它们会向内部 Timeline
+  // 追加自动化事件（memory: Infinity），高频调用导致 O(n²) 退化甚至死循环。
+  // 改用自己的 fixedUpdate 循环 + lerp 平滑插值，只做 .value 直接赋值，零事件堆积。
+
+  const UPDATE_INTERVAL = 50;   // 20 Hz，BPM / 音量平滑足够
+  const LERP_FACTOR = 0.15;     // 每 tick 靠近目标 15%，~1s 达 95%
+  const BPM_SNAP = 0.5;         // BPM 差值 < 0.5 时直接跳到目标
+  const VOL_SNAP = 0.3;         // dB 差值 < 0.3 时直接跳到目标
+
+  let targetBPM = 120;
+  let updateTimer: ReturnType<typeof setInterval> | null = null;
+  /** 每轨的目标音量；到达后自动移除条目 */
+  const targetVolumes = new Map<string, number>();
+
+  function startUpdateLoop() {
+    if (updateTimer) return;
+    updateTimer = setInterval(fixedUpdate, UPDATE_INTERVAL);
+  }
+
+  function stopUpdateLoop() {
+    if (updateTimer) {
+      clearInterval(updateTimer);
+      updateTimer = null;
+    }
+  }
+
+  function fixedUpdate() {
+    if (!T || !isPlaying.value) return;
+
+    // ─ BPM lerp ─
+    const cur = T.getTransport().bpm.value;
+    const diff = targetBPM - cur;
+    if (Math.abs(diff) > BPM_SNAP) {
+      T.getTransport().bpm.value = cur + diff * LERP_FACTOR;
+    } else if (diff !== 0) {
+      T.getTransport().bpm.value = targetBPM;
+    }
+
+    // ─ Volume lerp ─
+    for (const track of activeTracks) {
+      const target = targetVolumes.get(track.id);
+      if (target === undefined) continue;
+      const curVol = track.channel.volume.value;
+      const volDiff = target - curVol;
+      if (Math.abs(volDiff) > VOL_SNAP) {
+        track.channel.volume.value = curVol + volDiff * LERP_FACTOR;
+      } else {
+        track.channel.volume.value = target;
+        targetVolumes.delete(track.id);
+      }
+    }
+  }
 
   async function start() {
+    if (starting || isPlaying.value) return;
     if (!pendingConfig && !built) return;
 
-    // 动态加载 Tone.js —— 只在用户交互后的 start() 里执行
-    // 模块加载后 Tone 会初始化 AudioContext，此时用户手势有效
-    if (!T) {
-      T = await import('tone');
+    starting = true;
+    try {
+      if (!T) {
+        T = await import('tone');
+      }
+      if (!starting) return;
+
+      await T.start();
+      if (!starting) return;
+
+      if (!built && pendingConfig) {
+        buildAllTracks(T, pendingConfig);
+      }
+
+      T.getTransport().cancel();
+
+      for (const track of activeTracks) {
+        track.sequence.start(0);
+      }
+
+      applyStage(currentStage);
+      startUpdateLoop();
+
+      T.getTransport().start();
+      isPlaying.value = true;
+    } finally {
+      starting = false;
     }
-
-    // 启动 AudioContext（保证 resumed）
-    await T.start();
-
-    // 首次 / 换配置后构建音频图
-    if (!built && pendingConfig) {
-      buildAllTracks(T, pendingConfig);
-    }
-
-    // 启动所有序列
-    for (const track of activeTracks) {
-      track.sequence.start(0);
-    }
-
-    // 根据当前阶段设置轨道可见性
-    applyStage(currentStage);
-
-    T.getTransport().start();
-    isPlaying.value = true;
   }
 
   function stop() {
+    starting = false;
+    stopUpdateLoop();
+    targetVolumes.clear();
+
     if (!built || !T) {
       isPlaying.value = false;
       return;
     }
 
-    // 必须先停序列再停 Transport；反过来会导致 Tone.js assertRange 崩溃
     for (const track of activeTracks) {
-      try { track.sequence.stop(); } catch { /* sequence may already be stopped */ }
+      try { track.sequence.stop(); } catch { /* already stopped */ }
     }
 
     try {
       T.getTransport().stop();
+      T.getTransport().cancel();
       T.getTransport().position = 0;
     } catch (err) {
       console.warn('[BGM] Transport stop error:', err);
@@ -212,7 +275,7 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
 
   function setStage(stage: Stage) {
     currentStage = stage;
-    if (isPlaying.value) {
+    if (isPlaying.value && built) {
       applyStage(stage);
     }
   }
@@ -222,24 +285,20 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
       const enabled = track.config.stages.includes(stage);
       track.channel.mute = !enabled;
 
-      if (enabled && track.config.stageVolumes && stage in track.config.stageVolumes) {
-        track.channel.volume.rampTo(track.config.stageVolumes[stage], 0.5);
-      } else if (enabled) {
-        track.channel.volume.rampTo(track.config.volume, 0.5);
+      if (enabled) {
+        const vol = (track.config.stageVolumes && stage in track.config.stageVolumes)
+          ? track.config.stageVolumes[stage]
+          : track.config.volume;
+        targetVolumes.set(track.id, vol);
       }
     }
   }
 
   function setBPM(bpm: number) {
-    if (!pendingConfig || !T) return;
+    if (!pendingConfig) return;
     const [min, max] = pendingConfig.bpmRange;
-    const clamped = Math.max(min, Math.min(max, bpm));
-    currentBPM.value = clamped;
-    try {
-      T.getTransport().bpm.rampTo(clamped, 0.3);
-    } catch (err) {
-      console.warn('[BGM] setBPM error:', err);
-    }
+    targetBPM = Math.max(min, Math.min(max, bpm));
+    currentBPM.value = targetBPM;
   }
 
   // ── 清理 ──
@@ -248,7 +307,9 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
   function disposeGraph() {
     if (!built) return;
 
-    // 先停序列，再停 Transport
+    stopUpdateLoop();
+    targetVolumes.clear();
+
     for (const track of activeTracks) {
       try { track.sequence.stop(); } catch { /* ignore */ }
     }
@@ -256,6 +317,7 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
     if (T) {
       try {
         T.getTransport().stop();
+        T.getTransport().cancel();
         T.getTransport().position = 0;
       } catch { /* ignore */ }
     }
