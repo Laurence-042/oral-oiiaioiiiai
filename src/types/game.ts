@@ -99,8 +99,8 @@ export interface VowelDetectorHookReturn {
 /** 游戏主状态 */
 export type GameState = 'idle' | 'ready' | 'playing' | 'paused' | 'interrupted' | 'sharing';
 
-/** 视觉阶段 1-5 */
-export type Stage = 1 | 2 | 3 | 4 | 5;
+/** 视觉阶段 (1-based, 数量由资源包定义，默认 5) */
+export type Stage = number;
 
 /** 中断原因 */
 export type InterruptReason = 'silence_timeout' | 'consecutive_errors' | 'manual';
@@ -132,6 +132,10 @@ export interface GameStats {
   sequenceIndex: number;
   /** 连续错误次数 */
   consecutiveErrors: number;
+  /** 总发音次数 */
+  totalVowels: number;
+  /** 正确发音次数 */
+  correctVowels: number;
   /** 上次有效发音时间 */
   lastVowelTime: number;
   /** 游戏开始时间 */
@@ -272,6 +276,44 @@ export interface StageVisualConfig {
     sfxPitch: number;
   };
   screenEffects: ScreenEffectsConfig;
+}
+
+// ==================== 资源包文案配置类型 ====================
+
+/** 文案变体 (标题 + 副标题) */
+export interface CopywritingVariant {
+  title: string;
+  subtitle: string;
+}
+
+/** 高光标签模板 (支持 {stageName} {combo} {count} {speed} {accuracy} 占位符) */
+export interface HighlightLabelTemplates {
+  'stage-up': string;         // e.g. "⬆ {stageName}"
+  'combo-milestone': string;  // e.g. "🔥 {combo} 连击"
+  'perfect-cycle': string;    // e.g. "✨ 完美循环 ×{count}"
+  'speed-burst': string;      // e.g. "⚡ 极速 {speed}/s"
+  'accuracy-streak': string;  // e.g. "🎯 精准 ×{count}"
+  'final': string;            // e.g. "🏁 最终时刻"
+}
+
+/** 资源包单阶段配置 */
+export interface PackStageConfig {
+  /** 阶段名称 */
+  name: string;
+  /** 触发分数阈值 */
+  scoreThreshold: number;
+  /** 该阶段的分享文案池 */
+  copywriting?: CopywritingVariant[];
+}
+
+/** 资源包文案配置 (全部可选，有默认 fallback) */
+export interface PackTextConfig {
+  /** 阶段定义 (数量、名称、分数阈值、文案) */
+  stages?: PackStageConfig[];
+  /** 高光标签模板 */
+  highlightLabels?: Partial<HighlightLabelTemplates>;
+  /** 高连击/高循环特殊文案 */
+  specialCopywriting?: CopywritingVariant[];
 }
 
 // ==================== 事件回调类型 ====================

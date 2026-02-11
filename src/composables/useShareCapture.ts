@@ -1,15 +1,10 @@
 import { ref } from 'vue';
-import type { GameSnapshot, Stage } from '@/types/game';
-
-interface CopywritingVariant {
-  title: string;
-  subtitle: string;
-}
+import type { GameSnapshot, PackTextConfig, CopywritingVariant } from '@/types/game';
 
 /**
- * 每个阶段的多变种文案池
+ * 每个阶段的多变种文案池（默认 fallback）
  */
-const STAGE_COPYWRITING: Record<Stage, CopywritingVariant[]> = {
+const STAGE_COPYWRITING: Record<number, CopywritingVariant[]> = {
   1: [
     { title: '猫咪听到了你的召唤', subtitle: '这只是个开始，继续练习吧！' },
     { title: '初次见面，请多关照', subtitle: '猫咪已经注意到你了 🐱' },
@@ -73,12 +68,18 @@ function pickVariant(variants: CopywritingVariant[], snap: GameSnapshot): Copywr
 
 /**
  * 根据阶段生成文案（含多变种随机）
+ * 优先使用资源包提供的文案，fallback 到内置默认文案
  */
-export function generateCopywriting(snap: GameSnapshot): { title: string; subtitle: string } {
+export function generateCopywriting(snap: GameSnapshot, textConfig?: PackTextConfig): { title: string; subtitle: string } {
+  // 特殊文案
   if (snap.perfectCycles >= 5 || snap.maxCombo >= 100) {
-    return pickVariant(SPECIAL_COPYWRITING, snap);
+    const specials = textConfig?.specialCopywriting ?? SPECIAL_COPYWRITING;
+    return pickVariant(specials, snap);
   }
-  return pickVariant(STAGE_COPYWRITING[snap.stage] ?? STAGE_COPYWRITING[1], snap);
+  // 阶段文案：优先资源包 stages[].copywriting
+  const packStage = textConfig?.stages?.[snap.stage - 1]?.copywriting;
+  const variants = packStage ?? STAGE_COPYWRITING[snap.stage] ?? STAGE_COPYWRITING[1];
+  return pickVariant(variants, snap);
 }
 
 /**
@@ -105,8 +106,7 @@ function roundRect(
   ctx.lineTo(x + w - r, y);
   ctx.arcTo(x + w, y, x + w, y + r, r);
   ctx.lineTo(x + w, y + h - r);
-  ctx.arcTo(x + w, y, x + w, y + r, r);
-  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
   ctx.lineTo(x + r, y + h);
   ctx.arcTo(x, y + h, x, y + h - r, r);
   ctx.lineTo(x, y + r);
@@ -179,9 +179,9 @@ function drawQRPlaceholder(
 
 export interface ShareCaptureReturn {
   generating: ReturnType<typeof ref<boolean>>;
-  generateShareImage: (snap: GameSnapshot, siteUrl?: string) => Promise<Blob | null>;
-  downloadShareImage: (snap: GameSnapshot, siteUrl?: string) => Promise<void>;
-  copyShareImage: (snap: GameSnapshot, siteUrl?: string) => Promise<boolean>;
+  generateShareImage: (snap: GameSnapshot, siteUrl?: string, textConfig?: PackTextConfig) => Promise<Blob | null>;
+  downloadShareImage: (snap: GameSnapshot, siteUrl?: string, textConfig?: PackTextConfig) => Promise<void>;
+  copyShareImage: (snap: GameSnapshot, siteUrl?: string, textConfig?: PackTextConfig) => Promise<boolean>;
 }
 
 /**
@@ -198,7 +198,7 @@ export function useShareCapture(): ShareCaptureReturn {
   /**
    * 生成分享图片 Blob
    */
-  async function generateShareImage(snap: GameSnapshot, siteUrl = 'https://oiiaioiiiai.com'): Promise<Blob | null> {
+  async function generateShareImage(snap: GameSnapshot, siteUrl = 'https://oiiaioiiiai.com', textConfig?: PackTextConfig): Promise<Blob | null> {
     generating.value = true;
     try {
       const W = 720;
@@ -236,7 +236,7 @@ export function useShareCapture(): ShareCaptureReturn {
       ctx.fillText('🐱 对着猫叫，成为传说', W / 2, 115);
 
       // === 文案区域 ===
-      const copy = generateCopywriting(snap);
+      const copy = generateCopywriting(snap, textConfig);
       ctx.fillStyle = '#e6edf3';
       ctx.font = 'bold 36px "SF Pro Display", system-ui, sans-serif';
       ctx.fillText(copy.title, W / 2, 200);
@@ -294,7 +294,7 @@ export function useShareCapture(): ShareCaptureReturn {
 
       // 阶段指示器
       const stageBarY = statY + 60;
-      const stageNames = ['初醒', '躁动', '狂热', '超度', '神猫'];
+      const stageNames = textConfig?.stages?.map(s => s.name) ?? ['初醒', '躁动', '狂热', '超度', '神猫'];
       const stageBarW = cardW - 60;
       const stageBarX = cardX + 30;
       const dotGap = stageBarW / (stageNames.length - 1);
@@ -384,8 +384,8 @@ export function useShareCapture(): ShareCaptureReturn {
   /**
    * 生成并下载分享图片
    */
-  async function downloadShareImage(snap: GameSnapshot, siteUrl?: string): Promise<void> {
-    const blob = await generateShareImage(snap, siteUrl);
+  async function downloadShareImage(snap: GameSnapshot, siteUrl?: string, textConfig?: PackTextConfig): Promise<void> {
+    const blob = await generateShareImage(snap, siteUrl, textConfig);
     if (!blob) return;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -400,8 +400,8 @@ export function useShareCapture(): ShareCaptureReturn {
   /**
    * 生成并复制分享图片到剪贴板
    */
-  async function copyShareImage(snap: GameSnapshot, siteUrl?: string): Promise<boolean> {
-    const blob = await generateShareImage(snap, siteUrl);
+  async function copyShareImage(snap: GameSnapshot, siteUrl?: string, textConfig?: PackTextConfig): Promise<boolean> {
+    const blob = await generateShareImage(snap, siteUrl, textConfig);
     if (!blob) return false;
     try {
       await navigator.clipboard.write([

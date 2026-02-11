@@ -14,77 +14,91 @@
 
     <!-- ==================== 结算遮罩 ==================== -->
     <Transition name="overlay">
-      <div v-if="state === 'interrupted'" class="result-overlay" @click.self="handleRestart">
-        <!-- 牌堆 -->
-        <div class="result-stack">
-          <!-- 分享图（倾斜在左侧） -->
-          <img
-            v-if="shareImageUrl"
-            :src="shareImageUrl"
-            class="stack-card stack-img"
-            alt="分享图片 — 长按或右键保存"
-            draggable="true"
-          />
-
-          <!-- 主结算卡片 -->
-          <div class="result-card">
-            <div class="result-icon">{{ interruptIcon }}</div>
-            <h2 class="result-title">{{ interruptTitle }}</h2>
-            <p class="result-subtitle">{{ interruptSubtitle }}</p>
-            <p class="result-reason">{{ interruptReasonText }}</p>
-
-            <div class="result-stats">
-              <div class="result-stat main">
-                <span class="result-label">最终得分</span>
-                <span class="result-value">{{ snapshot?.score ?? stats.score }}</span>
-              </div>
-              <div class="result-stat">
-                <span class="result-label">最高连击</span>
-                <span class="result-value">{{ snapshot?.maxCombo ?? stats.maxCombo }}x</span>
-              </div>
-              <div class="result-stat">
-                <span class="result-label">到达阶段</span>
-                <span class="result-value">{{ snapshot?.stageName ?? stats.stageName }}</span>
-              </div>
-              <div class="result-stat">
-                <span class="result-label">完美循环</span>
-                <span class="result-value">{{ snapshot?.perfectCycles ?? stats.perfectCycles }}</span>
-              </div>
-              <div class="result-stat">
-                <span class="result-label">持续时间</span>
-                <span class="result-value">{{ formattedDuration }}</span>
-              </div>
+      <div v-if="state === 'interrupted'" class="result-overlay">
+        <!-- 扇形卡片轮播 -->
+        <CardFan
+          :count="fanCardCount"
+          :initialIndex="fanActiveIndex"
+          @update:activeIndex="(i: number) => fanActiveIndex = i"
+        >
+          <!-- 卡片 0: 分享图 -->
+          <template #card-0>
+            <div class="fan-card-inner card-share">
+              <img v-if="shareImageUrl" :src="shareImageUrl" class="card-full-img" alt="分享图片" draggable="true" />
+              <div v-else class="card-placeholder">生成中…</div>
             </div>
+          </template>
 
-            <!-- 高光时刻 -->
-            <div v-if="hlMoments.highlights.value.length" class="highlights-section">
-              <h3 class="highlights-title">📸 高光时刻</h3>
-              <div class="highlights-strip">
-                <div
-                  v-for="hl in hlMoments.highlights.value"
-                  :key="hl.id"
-                  class="highlight-card"
-                >
-                  <span class="highlight-label">{{ hl.label }}</span>
-                  <span class="highlight-score">{{ hl.score }} 分</span>
-                  <span class="highlight-combo" v-if="hl.combo">×{{ hl.combo }}</span>
+          <!-- 卡片 1: 结算卡 -->
+          <template #card-1>
+            <div class="fan-card-inner card-result">
+              <div class="result-icon">{{ interruptIcon }}</div>
+              <h2 class="result-title">{{ interruptTitle }}</h2>
+              <p class="result-subtitle">{{ interruptSubtitle }}</p>
+              <p class="result-reason">{{ interruptReasonText }}</p>
+
+              <div class="result-stats">
+                <div class="result-stat main">
+                  <span class="result-label">最终得分</span>
+                  <span class="result-value">{{ snapshot?.score ?? stats.score }}</span>
+                </div>
+                <div class="result-stat">
+                  <span class="result-label">最高连击</span>
+                  <span class="result-value">{{ snapshot?.maxCombo ?? stats.maxCombo }}x</span>
+                </div>
+                <div class="result-stat">
+                  <span class="result-label">到达阶段</span>
+                  <span class="result-value">{{ snapshot?.stageName ?? stats.stageName }}</span>
+                </div>
+                <div class="result-stat">
+                  <span class="result-label">完美循环</span>
+                  <span class="result-value">{{ snapshot?.perfectCycles ?? stats.perfectCycles }}</span>
+                </div>
+                <div class="result-stat">
+                  <span class="result-label">持续时间</span>
+                  <span class="result-value">{{ formattedDuration }}</span>
                 </div>
               </div>
             </div>
+          </template>
 
-            <!-- 分享提示 -->
-            <p class="share-hint" v-if="shareImageUrl || hlMoments.highlights.value.length">
-              👆 长按或右键保存图片分享
-            </p>
-
-            <div class="result-actions">
-              <button class="btn primary large" @click="handleRestart">🔄 再来一次</button>
-              <button class="btn ghost" @click="handleBackToIdle">返回首页</button>
+          <!-- 卡片 2+: 高光时刻 -->
+          <template v-for="(hl, hi) in hlMoments.highlights.value" :key="hl.id" #['card-'+(hi+2)]>
+            <div class="fan-card-inner card-highlight">
+              <img
+                v-if="highlightImageUrls[hi]"
+                :src="highlightImageUrls[hi]"
+                class="card-full-img"
+                :alt="hl.label"
+                draggable="true"
+              />
+              <div v-else class="card-placeholder">
+                <span>{{ hl.label }}</span>
+              </div>
             </div>
-          </div>
+          </template>
+        </CardFan>
+
+        <!-- 操作按钮 (在扇形卡片下方) -->
+        <div class="result-actions">
+          <p class="share-hint">👆 左右滑动查看更多 · 长按图片保存分享</p>
+          <button class="btn primary large" @click="handleRestart">🔄 再来一次</button>
+          <button class="btn ghost" @click="handleBackToIdle">返回首页</button>
         </div>
       </div>
     </Transition>
+
+    <!-- ==================== 高光弹出提示 ==================== -->
+    <TransitionGroup name="hl-toast" tag="div" class="hl-toast-container">
+      <div
+        v-for="toast in hlMoments.toasts.value"
+        :key="toast.id"
+        class="hl-toast"
+        :class="toast.reason"
+      >
+        {{ toast.label }}
+      </div>
+    </TransitionGroup>
 
     <!-- ==================== 预备遮罩 ==================== -->
     <Transition name="overlay">
@@ -283,6 +297,8 @@ import { useResourcePack } from '@/composables/useResourcePack';
 import { useDynamicBGM } from '@/composables/useDynamicBGM';
 import { useShareCapture, generateCopywriting } from '@/composables/useShareCapture';
 import { useHighlights } from '@/composables/useHighlights';
+import { renderHighlightCard } from '@/composables/useHighlightRenderer';
+import CardFan from '@/components/CardFan.vue';
 import { getStageVisualConfig } from '@/config/stages';
 import { isFuzzyMatch } from '@/config/vowels';
 import type { InterruptReason, Vowel, VowelDetectorHookReturn, VowelDetectionResult } from '@/types/game';
@@ -345,6 +361,42 @@ const bgm = useDynamicBGM();
 const shareCapture = useShareCapture();
 const hlMoments = useHighlights();
 const shareImageUrl = ref<string | null>(null);
+/** 高光卡片图片 URL 列表（与 hlMoments.highlights 一一对应） */
+const highlightImageUrls = ref<string[]>([]);
+/** 结算扇形卡当前索引 */
+const fanActiveIndex = ref(0);
+/** 结算扇形卡总数 */
+const fanCardCount = computed(() => {
+  // 分享图 + 结算卡 + 高光卡片数
+  return 1 + 1 + hlMoments.highlights.value.length;
+});
+
+/** 生成所有高光卡片图片 */
+async function generateHighlightCards() {
+  const pack = loadedPack.value;
+  if (!pack) return;
+  const stageNames = pack.textConfig.stages?.map(s => s.name) ?? ['初醒', '躁动', '狂热', '超度', '神猫'];
+  const urls: string[] = [];
+  for (const hl of hlMoments.highlights.value) {
+    try {
+      const blob = await renderHighlightCard({
+        moment: hl,
+        spriteFrames: pack.animationFrames,
+        stageNames,
+      });
+      if (blob) {
+        urls.push(URL.createObjectURL(blob));
+      } else {
+        urls.push('');
+      }
+    } catch {
+      urls.push('');
+    }
+  }
+  // 清理旧的
+  highlightImageUrls.value.forEach(u => { if (u) URL.revokeObjectURL(u); });
+  highlightImageUrls.value = urls;
+}
 
 // ==================== 资源包 ====================
 const resPack = useResourcePack();
@@ -410,8 +462,8 @@ let frameAccumulator = 0;
 
 const stageConfig = computed(() => getStageVisualConfig(game.currentStage.value));
 
-/** 神猫阶段(5)启用极光背景 */
-const showAurora = computed(() => state.value === 'playing' && game.currentStage.value === 5);
+/** 最高阶段启用极光背景 */
+const showAurora = computed(() => state.value === 'playing' && game.currentStage.value >= game.stageCount.value);
 
 // ==================== 视觉特效 ====================
 
@@ -847,15 +899,17 @@ const lastInterruptReason = ref<InterruptReason | null>(null);
 const interruptCopy = computed(() => {
   const s = snapshot.value;
   if (!s) return { title: '游戏结束', subtitle: '' };
-  return generateCopywriting(s);
+  const textCfg = resPack.loadedPack.value?.textConfig;
+  return generateCopywriting(s, textCfg);
 });
 
 const interruptIcon = computed(() => {
   const s = snapshot.value;
   if (!s) return '😿';
+  const maxStage = game.stageCount.value;
   if (s.perfectCycles >= 3) return '🏆';
-  if (s.stage >= 4) return '🔥';
-  if (s.stage >= 2) return '😸';
+  if (s.stage >= maxStage - 1) return '🔥';
+  if (s.stage >= Math.ceil(maxStage * 0.4)) return '😸';
   return '🐱';
 });
 
@@ -930,15 +984,18 @@ watch(state, (newState, oldState) => {
     if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = 0; }
     countdownValue.value = 0;
 
-    // 自动生成分享图片
+    // 自动生成分享图片 + 高光卡片
     const snap = snapshot.value;
     if (snap) {
-      shareCapture.generateShareImage(snap).then((blob) => {
+      const textCfg = loadedPack.value?.textConfig;
+      shareCapture.generateShareImage(snap, undefined, textCfg).then((blob) => {
         if (blob) {
           if (shareImageUrl.value) URL.revokeObjectURL(shareImageUrl.value);
           shareImageUrl.value = URL.createObjectURL(blob);
         }
       });
+      generateHighlightCards();
+      fanActiveIndex.value = 1; // 默认显示结算卡
     }
   }
 });
@@ -959,6 +1016,13 @@ game.onPerfectCycle((count) => {
 
 game.onScoreUpdate(() => {
   hlMoments.onComboUpdate(stats.value.combo, stats.value.score, game.currentStage.value);
+  // 精准里程碑：基于累计正确发音数
+  hlMoments.onAccuracyUpdate(stats.value.correctVowels, stats.value.score, game.currentStage.value);
+  // 极速检测：利用最近的发音间隔
+  if (playerIntervals.length >= 4) {
+    const avgMs = playerIntervals.reduce((a, b) => a + b, 0) / playerIntervals.length;
+    hlMoments.onSpeedUpdate(avgMs, playerIntervals.length, stats.value.score, stats.value.combo, game.currentStage.value);
+  }
 });
 
 // ==================== 用户操作 ====================
@@ -1038,6 +1102,8 @@ const handleRestart = async () => {
   isFainting.value = false;
   // 清理分享素材
   if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
+  highlightImageUrls.value.forEach(u => { if (u) URL.revokeObjectURL(u); });
+  highlightImageUrls.value = [];
   hlMoments.clear();
   resetGame();
   try {
@@ -1054,6 +1120,8 @@ const handleRestart = async () => {
 const handleBackToIdle = () => {
   isFainting.value = false;
   if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
+  highlightImageUrls.value.forEach(u => { if (u) URL.revokeObjectURL(u); });
+  highlightImageUrls.value = [];
   hlMoments.clear();
   activeDetector.value.stop();
   resetGame();
@@ -1075,10 +1143,14 @@ onMounted(async () => {
   }
 });
 
-// 资源包切换时重新初始化 BGM
+// 资源包切换时重新初始化 BGM + 文案配置
 watch(loadedPack, (pack) => {
   if (pack?.bgmConfig) {
     bgm.init(pack.bgmConfig);
+  }
+  if (pack?.textConfig) {
+    hlMoments.setTextConfig(pack.textConfig);
+    game.setTextConfig(pack.textConfig);
   }
 });
 
@@ -1089,6 +1161,7 @@ onUnmounted(() => {
   stopTrail();
   bgm.dispose();
   if (shareImageUrl.value) URL.revokeObjectURL(shareImageUrl.value);
+  highlightImageUrls.value.forEach(u => { if (u) URL.revokeObjectURL(u); });
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = 0; }
   resPack.dispose();
 });
@@ -1496,130 +1569,81 @@ onUnmounted(() => {
 /* ==================== 结算遮罩 ==================== */
 .result-overlay {
   position: fixed; inset: 0; z-index: 100;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 20px;
   background: rgba(0,0,0,0.75); backdrop-filter: blur(10px);
+  padding: 20px 0;
+  overflow: hidden;
 }
-.result-stack {
-  position: relative;
-  display: flex; align-items: center; justify-content: center;
-  max-width: 440px; width: calc(100% - 32px);
-}
-/* 牌堆：倾斜在主卡片后面的分享素材 */
-.stack-card {
-  position: absolute;
-  border-radius: 16px;
-  box-shadow: 0 12px 48px rgba(0,0,0,0.6);
-  pointer-events: auto;
-  transition: transform 0.5s cubic-bezier(0.16,1,0.3,1), opacity 0.4s ease;
-  object-fit: cover;
-  border: 1px solid rgba(255,255,255,0.12);
-}
-.stack-img {
-  width: 180px; height: auto; max-height: 240px;
-  transform: rotate(-8deg) translate(-110%, -10%);
-  z-index: -1;
-}
-.stack-card:hover {
-  z-index: 10;
-  box-shadow: 0 16px 56px rgba(88,160,255,0.3);
-}
-.stack-img:hover { transform: rotate(-3deg) translate(-110%, -14%) scale(1.08); }
 
-.result-card {
+/* ── 扇形卡片内容 ── */
+.fan-card-inner {
+  width: 100%; height: 100%;
+  border-radius: 16px;
+  overflow: hidden;
   background: linear-gradient(145deg, rgba(22,27,34,0.97), rgba(13,17,23,0.99));
   border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 24px; padding: 36px 32px;
-  width: 100%;
-  text-align: center;
-  box-shadow: 0 24px 64px rgba(0,0,0,0.5);
-  position: relative; z-index: 1;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.5);
 }
-.result-icon { font-size: 52px; margin-bottom: 6px; }
+
+.card-full-img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.card-placeholder {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  color: #6e7681; font-size: 14px;
+}
+
+/* 结算卡内部 */
+.card-result {
+  padding: 24px 20px;
+  text-align: center;
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+}
+
+.result-icon { font-size: 44px; margin-bottom: 4px; }
 .result-title {
-  font-size: 26px; font-weight: 700;
+  font-size: 22px; font-weight: 700;
   letter-spacing: 2px; margin-bottom: 4px;
 }
 .result-subtitle {
-  font-size: 14px; color: #8b949e; margin-bottom: 2px;
+  font-size: 13px; color: #8b949e; margin-bottom: 2px;
 }
-.result-reason { font-size: 12px; color: #6e7681; margin-bottom: 20px; }
+.result-reason { font-size: 11px; color: #6e7681; margin-bottom: 16px; }
 .result-stats {
   display: grid; grid-template-columns: 1fr 1fr;
-  gap: 12px; margin-bottom: 20px;
+  gap: 8px;
 }
 .result-stat {
   background: rgba(255,255,255,0.04);
-  border-radius: 12px; padding: 12px 10px;
+  border-radius: 10px; padding: 10px 8px;
 }
 .result-stat.main {
   grid-column: 1 / -1;
   background: rgba(88,160,255,0.1);
   border: 1px solid rgba(88,160,255,0.2);
-  padding: 16px 10px;
+  padding: 14px 8px;
 }
 .result-label {
   display: block; font-size: 10px; color: #8b949e;
-  text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;
+  text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px;
 }
-.result-value { display: block; font-size: 20px; font-weight: 700; }
-.result-stat.main .result-value { font-size: 32px; }
+.result-value { display: block; font-size: 18px; font-weight: 700; }
+.result-stat.main .result-value { font-size: 28px; }
 
-/* 高光时刻画廊 */
-.highlights-section {
-  margin-bottom: 16px;
+/* 操作按钮区 */
+.result-actions {
+  display: flex; flex-direction: column; gap: 10px;
+  width: min(80vw, 320px);
+  align-items: stretch;
 }
-.highlights-title {
-  font-size: 13px;
-  color: #8b949e;
-  margin-bottom: 8px;
-  font-weight: 600;
-  letter-spacing: 1px;
-}
-.highlights-strip {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding: 4px 0;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.15) transparent;
-}
-.highlights-strip::-webkit-scrollbar {
-  height: 4px;
-}
-.highlights-strip::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.15);
-  border-radius: 2px;
-}
-.highlight-card {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(255,255,255,0.05);
-  min-width: 72px;
-}
-.highlight-card .highlight-label {
-  font-size: 11px;
-  color: #ccc;
-  white-space: nowrap;
-}
-.highlight-card .highlight-score {
-  font-size: 14px;
-  font-weight: 700;
-  color: #f0f0f0;
-}
-.highlight-card .highlight-combo {
-  font-size: 11px;
-  color: #58a0ff;
-  font-weight: 600;
-}
-
 .share-hint {
-  font-size: 12px; color: #6e7681; margin-bottom: 16px;
+  font-size: 11px; color: #6e7681; text-align: center;
   animation: hint-fade 3s ease-in-out infinite;
 }
 @keyframes hint-fade {
@@ -1627,11 +1651,44 @@ onUnmounted(() => {
   50% { opacity: 1; }
 }
 
-.result-actions { display: flex; flex-direction: column; gap: 10px; }
+/* ==================== 高光弹出提示 ==================== */
+.hl-toast-container {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -120%);
+  z-index: 90;
+  display: flex; flex-direction: column-reverse;
+  align-items: center; gap: 8px;
+  pointer-events: none;
+}
+.hl-toast {
+  padding: 8px 18px;
+  border-radius: 20px;
+  background: rgba(13,17,23,0.9);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: #e6edf3;
+  font-size: 14px; font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  backdrop-filter: blur(6px);
+}
+.hl-toast.stage-up { border-color: rgba(163,113,247,0.4); color: #d2a8ff; }
+.hl-toast.combo-milestone { border-color: rgba(255,123,114,0.4); color: #ffa198; }
+.hl-toast.perfect-cycle { border-color: rgba(88,166,255,0.4); color: #79c0ff; }
+.hl-toast.speed-burst { border-color: rgba(254,202,87,0.4); color: #feca57; }
+.hl-toast.accuracy-streak { border-color: rgba(72,219,251,0.4); color: #48dbfb; }
 
-.btn.accent {
-  background: linear-gradient(135deg, #f78166, #f0883e);
-  color: #0d1117; font-weight: 700;
+.hl-toast-enter-active {
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.hl-toast-leave-active {
+  transition: all 0.5s ease;
+}
+.hl-toast-enter-from {
+  opacity: 0; transform: translateY(30px) scale(0.8);
+}
+.hl-toast-leave-to {
+  opacity: 0; transform: translateY(-20px) scale(0.9);
 }
 
 /* ==================== 预备遮罩 ==================== */
@@ -1731,25 +1788,19 @@ onUnmounted(() => {
 
 /* ==================== 过渡 ==================== */
 .overlay-enter-active { transition: opacity 0.3s ease; }
-.overlay-enter-active .result-stack,
-.overlay-enter-active .result-card {
+.overlay-enter-active .card-fan {
   transition: transform 0.35s cubic-bezier(0.16,1,0.3,1), opacity 0.3s ease;
 }
-.overlay-enter-active .stack-card {
-  transition: transform 0.5s cubic-bezier(0.16,1,0.3,1) 0.15s, opacity 0.4s ease 0.1s;
-}
 .overlay-leave-active { transition: opacity 0.2s ease; }
-.overlay-leave-active .result-stack,
-.overlay-leave-active .result-card {
+.overlay-leave-active .card-fan {
   transition: transform 0.2s ease, opacity 0.2s ease;
 }
 .overlay-enter-from { opacity: 0; }
-.overlay-enter-from .result-card {
+.overlay-enter-from .card-fan {
   opacity: 0; transform: scale(0.92) translateY(20px);
 }
-.overlay-enter-from .stack-card { opacity: 0; }
 .overlay-leave-to { opacity: 0; }
-.overlay-leave-to .result-card {
+.overlay-leave-to .card-fan {
   opacity: 0; transform: scale(0.96) translateY(-10px);
 }
 
@@ -1773,18 +1824,10 @@ onUnmounted(() => {
   width: 48px; height: 48px; font-size: 24px; border-radius: 12px;
 }
 
-/* 移动端：牌堆改为卡片下方水平排列 */
-.mobile .stack-img {
-  width: 120px;
-  transform: rotate(-6deg) translate(-90%, -5%);
-}
-.mobile .result-card { padding: 28px 20px; }
 .mobile .result-title { font-size: 22px; }
-.mobile .result-stats { gap: 8px; margin-bottom: 16px; }
+.mobile .result-stats { gap: 8px; }
 .mobile .result-stat { padding: 10px 8px; }
 .mobile .share-hint { font-size: 11px; }
-.mobile .highlight-card { min-width: 56px; padding: 6px 8px; }
-.mobile .highlight-card .highlight-label { font-size: 9px; }
 
 .mobile .game-footer { padding: 10px 14px 16px; }
 .mobile .btn { padding: 10px 16px; font-size: 13px; }

@@ -1,5 +1,5 @@
 import { ref, computed, shallowRef } from 'vue';
-import type { Vowel, BGMConfig } from '@/types/game';
+import type { Vowel, BGMConfig, PackTextConfig } from '@/types/game';
 
 // ==================== 类型定义 ====================
 
@@ -12,6 +12,8 @@ export interface ResourcePackManifest {
   syllables: string[];      // 文件名列表，如 "001_U.wav"
   chromaFrames: string[];    // 文件名列表，如 "chroma_001.png"
   bgm?: string;              // BGM 配置文件名，如 "bgm.json"（可选）
+  /** 文案 / 阶段名 / 高光标签配置（可选，有默认 fallback） */
+  textConfig?: PackTextConfig;
 }
 
 /** 已加载的音节数据 */
@@ -31,6 +33,7 @@ export interface LoadedResourcePack {
   animationFrames: HTMLImageElement[];  // 其余帧 (循环帧)
   totalSyllableDuration: number;        // 所有音节时长之和 (秒)
   bgmConfig: BGMConfig | null;          // 动态 BGM 配置（可选）
+  textConfig: PackTextConfig;           // 文案配置（manifest 中的或空对象）
 }
 
 /** 资源包摘要 (未加载，仅元信息) */
@@ -175,7 +178,8 @@ export function useResourcePack() {
         idleFrame,
         animationFrames,
         totalSyllableDuration,
-        bgmConfig
+        bgmConfig,
+        textConfig: manifest.textConfig ?? {}
       };
 
       loadedPack.value = pack;

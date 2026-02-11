@@ -11,11 +11,13 @@ import type {
   StageChangeCallback,
   ComboBreakCallback,
   PerfectCycleCallback,
-  ScoreUpdateCallback
+  ScoreUpdateCallback,
+  PackTextConfig
 } from '@/types/game';
 import {
   calculateStage,
   getStageName,
+  getStageCount,
   calculateComboMultiplier,
   TIMING_CONFIG,
   SCORE_CONFIG
@@ -50,6 +52,11 @@ export interface UseGameStateReturn {
   setFreeMode: (config: Partial<FreeModeConfig>) => void;
   freeMode: Ref<FreeModeConfig>;
   
+  /** 资源包阶段配置 */
+  setTextConfig: (tc: PackTextConfig) => void;
+  /** 当前阶段总数 */
+  stageCount: ComputedRef<number>;
+  
   /** 事件回调 */
   onStageChange: (callback: StageChangeCallback) => void;
   onComboBreak: (callback: ComboBreakCallback) => void;
@@ -66,11 +73,13 @@ function createInitialStats(): GameStats {
     combo: 0,
     maxCombo: 0,
     stage: 1,
-    stageName: '初醒',
+    stageName: getStageName(1),
     comboMultiplier: 1,
     perfectCycles: 0,
     sequenceIndex: 0,
     consecutiveErrors: 0,
+    totalVowels: 0,
+    correctVowels: 0,
     lastVowelTime: 0,
     startTime: 0
   };
@@ -123,6 +132,10 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     rotationSpeed: undefined,
     effectIntensity: undefined
   });
+
+  /** 资源包提供的阶段配置 */
+  const textConfig = ref<PackTextConfig>({});
+  const stageCount = computed(() => getStageCount(textConfig.value));
 
   // ==================== 计算属性 ====================
   const currentStage = computed<Stage>(() => {
@@ -214,11 +227,11 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
       return;
     }
 
-    const newStage = calculateStage(stats.value.score);
+    const newStage = calculateStage(stats.value.score, textConfig.value);
     if (newStage !== stats.value.stage) {
       const oldStage = stats.value.stage;
       stats.value.stage = newStage;
-      stats.value.stageName = getStageName(newStage);
+      stats.value.stageName = getStageName(newStage, textConfig.value);
       emitStageChange(oldStage, newStage);
     }
   }
@@ -245,12 +258,14 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     
     // 自由模式：任意元音都算正确
     if (freeMode.value.enabled && freeMode.value.anyVowelMode) {
+      stats.value.totalVowels++;
       handleCorrectVowel(timeDelta, now);
       return;
     }
     
     // 正常模式：检查序列（允许模糊匹配）
     const isMatch = vowel === expectedVowel || isFuzzyMatch(expectedVowel, vowel);
+    stats.value.totalVowels++;
     if (isMatch) {
       handleCorrectVowel(timeDelta, now);
     } else {
@@ -269,6 +284,7 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     stats.value.combo++;
     stats.value.maxCombo = Math.max(stats.value.maxCombo, stats.value.combo);
     stats.value.consecutiveErrors = 0;
+    stats.value.correctVowels++;
     stats.value.lastVowelTime = now;
     
     // 推进序列
@@ -298,6 +314,13 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     }
     lastErrorTime = now;
     stats.value.consecutiveErrors++;
+
+    // 断连击
+    const prevCombo = stats.value.combo;
+    if (prevCombo > 0) {
+      stats.value.combo = 0;
+      stats.value.comboMultiplier = 1;
+    }
     
     // 自由模式禁用中断时不检查
     if (freeMode.value.enabled && freeMode.value.disableInterrupt) {
@@ -345,7 +368,7 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     // 如果自由模式锁定了阶段，设置初始阶段
     if (freeMode.value.enabled && freeMode.value.lockedStage) {
       stats.value.stage = freeMode.value.lockedStage;
-      stats.value.stageName = getStageName(freeMode.value.lockedStage);
+      stats.value.stageName = getStageName(freeMode.value.lockedStage, textConfig.value);
     }
     
     state.value = 'playing';
@@ -443,8 +466,18 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     // 如果锁定了阶段且正在游戏中，立即应用
     if (state.value === 'playing' && newConfig.lockedStage) {
       stats.value.stage = newConfig.lockedStage;
-      stats.value.stageName = getStageName(newConfig.lockedStage);
+      stats.value.stageName = getStageName(newConfig.lockedStage, textConfig.value);
     }
+  }
+
+  /**
+   * 设置资源包文案 / 阶段配置
+   * 更新 textConfig 后，如果正在游戏中会立即刷新 stageName
+   */
+  function setTextConfig(tc: PackTextConfig): void {
+    textConfig.value = tc;
+    // 刷新当前 stageName（阶段编号不变，名称可能变了）
+    stats.value.stageName = getStageName(stats.value.stage, tc);
   }
 
   // ==================== 生命周期 ====================
@@ -472,6 +505,8 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     reset,
     setFreeMode,
     freeMode,
+    setTextConfig,
+    stageCount,
     onStageChange,
     onComboBreak,
     onPerfectCycle,
