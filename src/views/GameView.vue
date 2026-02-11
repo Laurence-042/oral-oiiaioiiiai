@@ -1216,17 +1216,6 @@ onUnmounted(() => {
   100% { transform: rotate(90deg) scale(0.7) translateY(60px); opacity: 0.3; filter: grayscale(0.8); }
 }
 
-/* ==================== 发声重启提示 ==================== */
-.voice-restart-hint {
-  margin-top: 14px;
-  font-size: 12px; color: #8b949e;
-  animation: hint-pulse 2s ease-in-out infinite;
-}
-@keyframes hint-pulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
-}
-
 /* ==================== 加载 ==================== */
 .loading-overlay {
   position: fixed; inset: 0; z-index: 200;

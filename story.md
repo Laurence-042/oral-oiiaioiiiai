@@ -326,7 +326,7 @@ interface StageConfig {
 
 ## 实现进度 Checklist
 
-> 最后更新：2026-02-09
+> 最后更新：2026-02-11
 
 ### 核心玩法
 
@@ -345,10 +345,13 @@ interface StageConfig {
 - [x] 速度加成 (<300ms → +5)
 - [x] 完美循环奖励 +50
 - [x] 分数 / 连击 / 阶段 / 循环 UI 显示
+- [x] 错误发音断连击 — *`handleWrongVowel` 重置 `combo = 0`*
+- [x] 累计正确 / 总发音计数 (`correctVowels` / `totalVowels`)
 
 ### 视觉阶段系统
 
 - [x] 5 阶段分数阈值 (0 / 500 / 2000 / 5000 / 10000)
+- [x] 阶段数量 & 分数阈值资源包化 — *`PackStageConfig` 统一 name/threshold/copywriting*
 - [x] 阶段切换回调 (`onStageChange`)
 - [x] 猫旋转速度按阶段变化
 - [x] 猫缩放按阶段变化
@@ -370,7 +373,7 @@ interface StageConfig {
 - [x] 手动暂停
 - [x] 结算卡片（分数/连击/阶段/循环/时长）
 - [x] 猫咪"晕倒"动画 + 屏幕渐暗 — *CSS faint-fall 动画*
-- [x] 任意发声快速重来 — *中断后保持检测器运行，检测到元音自动 restart*
+- [x] 统一复位逻辑 — *`resetPlayState()` 集中管理所有运行时状态*
 
 ### 资源包系统（story 外增强）
 
@@ -381,6 +384,15 @@ interface StageConfig {
 - [x] 帧动画同步（rAF + EMA 速度平滑）
 - [x] 资源包选择器 UI
 - [x] 加载进度条
+- [x] 资源包文案配置 (`PackTextConfig`) — *阶段名/阈值/文案/高光标签全部可覆盖*
+
+### 高光时刻系统（story 外增强）
+
+- [x] 高光时刻捕获 (`useHighlights`) — *stage-up / combo-milestone / perfect-cycle / speed-burst / accuracy-streak / final*
+- [x] Toast 弹出通知 — *TransitionGroup 动画，按类型着色*
+- [x] 高光卡片渲染 (`useHighlightRenderer`) — *Canvas 2D 720×960 含阶段背景+散落精灵+数据*
+- [x] 极速检测 (`speed-burst`) — *平均间隔 <180ms 且连续 6 次，每局一次*
+- [x] 精准里程碑 (`accuracy-streak`) — *累计正确 20/50/100/200，基于 `correctVowels`*
 
 ### 自由模式
 
@@ -395,10 +407,9 @@ interface StageConfig {
 
 ### 分享系统
 
-- [x] `sharing` 状态机状态
-- [x] 分享状态 UI 渲染 — *结算卡片内嵌分享预览，牌堆式倾斜展示图片/视频，长按或右键保存*
-- [x] 截图生成（分数 + 二维码 + 文案） — *Canvas 2D 绘制精美分享卡，含阶段进度条、装饰性 QR、多变种趣味文案*
-- [x] 视频录制（MediaRecorder，最后 15-30s） — *循环缓冲录制，游戏时自动启动，中断后即刻预览 WebM*
+- [x] 结算 UI — *CardFan 扇形卡片轮播（分享图 + 结算卡 + 高光卡），触摸/鼠标拖拽切换*
+- [x] 截图生成 — *Canvas 2D 分享卡，含阶段进度条、真实 QR 码（`qrcode` 库）、多变种文案*
+- [x] QR 码动态编码 — *`window.location.origin` 自动适配部署域名*
 - [ ] 排行榜前端 UI
 - [ ] 排行榜后端 (Cloudflare Workers KV)
 - [ ] 自定义 BGM 模式（上传 + BPM 检测）
