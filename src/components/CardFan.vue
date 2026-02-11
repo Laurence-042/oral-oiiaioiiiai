@@ -3,10 +3,8 @@
     <!-- 卡片区域 -->
     <div
       class="fan-track"
+      :class="{ dragging: isPointerDown }"
       @pointerdown="onPointerDown"
-      @pointermove="onPointerMove"
-      @pointerup="onPointerUp"
-      @pointercancel="onPointerUp"
       @wheel.prevent="onWheel"
     >
       <div
@@ -16,6 +14,7 @@
         :class="{ active: index === activeIndex }"
         :style="cardStyle(index)"
         @click="onCardClick(index)"
+        @dragstart.prevent
       >
         <slot :name="`card-${index}`" :index="index" :isActive="index === activeIndex" />
       </div>
@@ -35,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onUnmounted } from 'vue';
 
 const props = withDefaults(defineProps<{
   /** 卡片数量 */
@@ -66,9 +65,9 @@ const FAN_OPACITY_STEP = 0.25; // 相邻卡片透明度差
 
 function cardStyle(index: number) {
   const diff = index - activeIndex.value;
-  // 加入拖拽偏移的视觉映射
+  // 加入拖拽偏移的视觉映射（向右拖 dx>0 → 看前一张 → visualDiff 需增大）
   const dragFraction = dragOffset.value / 200; // 200px = 一张卡
-  const visualDiff = diff - dragFraction;
+  const visualDiff = diff + dragFraction;
 
   const angle = visualDiff * FAN_ANGLE;
   const tx = visualDiff * FAN_TRANSLATE_X;
@@ -102,6 +101,8 @@ function onCardClick(index: number) {
 let startX = 0;
 let isDragging = false;
 let pointerId: number | null = null;
+/** 拖拽进行中（控制 CSS 过渡禁用） */
+const isPointerDown = ref(false);
 
 function onPointerDown(e: PointerEvent) {
   if (pointerId !== null) return;
@@ -109,7 +110,11 @@ function onPointerDown(e: PointerEvent) {
   startX = e.clientX;
   isDragging = false;
   dragOffset.value = 0;
-  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  isPointerDown.value = true;
+  // 用 document 级别监听，避免子元素（img 等）劫持 pointer 事件
+  document.addEventListener('pointermove', onPointerMove);
+  document.addEventListener('pointerup', onPointerUp);
+  document.addEventListener('pointercancel', onPointerUp);
 }
 
 function onPointerMove(e: PointerEvent) {
@@ -122,18 +127,32 @@ function onPointerMove(e: PointerEvent) {
 function onPointerUp(e: PointerEvent) {
   if (e.pointerId !== pointerId) return;
   pointerId = null;
+  // 先恢复过渡（让卡片平滑回弹/切换）
+  isPointerDown.value = false;
 
   const dx = dragOffset.value;
   dragOffset.value = 0;
 
   if (Math.abs(dx) > 50) {
-    // 滑动超过阈值 → 切换卡片
+    // 向左拖(dx<0) → 下一张，向右拖(dx>0) → 上一张
     goTo(activeIndex.value + (dx < 0 ? 1 : -1));
   }
+
+  // 移除 document 级别监听
+  document.removeEventListener('pointermove', onPointerMove);
+  document.removeEventListener('pointerup', onPointerUp);
+  document.removeEventListener('pointercancel', onPointerUp);
 
   // 延迟清除 isDragging 防止 click 事件误触
   requestAnimationFrame(() => { isDragging = false; });
 }
+
+// 组件卸载时确保清理
+onUnmounted(() => {
+  document.removeEventListener('pointermove', onPointerMove);
+  document.removeEventListener('pointerup', onPointerUp);
+  document.removeEventListener('pointercancel', onPointerUp);
+});
 
 // ── 滚轮 ──
 function onWheel(e: WheelEvent) {
@@ -167,7 +186,7 @@ defineExpose({ goTo, activeIndex });
   display: flex;
   align-items: center;
   justify-content: center;
-  touch-action: pan-y;
+  touch-action: none;
   cursor: grab;
 }
 
@@ -187,7 +206,7 @@ defineExpose({ goTo, activeIndex });
 }
 
 /* 拖拽中禁用过渡 */
-.fan-track:active .fan-card {
+.fan-track.dragging .fan-card {
   transition: none;
 }
 

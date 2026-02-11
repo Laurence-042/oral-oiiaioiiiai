@@ -933,6 +933,30 @@ const formattedDuration = computed(() => {
   return mins > 0 ? `${mins}分${remainSecs}秒` : `${remainSecs}秒`;
 });
 
+// ==================== 统一复位 ====================
+/** 完全重置一局游戏的运行时状态（不含检测器启停） */
+function resetPlayState() {
+  isFainting.value = false;
+
+  // 速度 & 发音间隔
+  lastPlayerVowelTime = 0;
+  playerIntervals = [];
+  rawSpeedRatio.value = 1;
+  animationSpeedRatio.value = 1;
+
+  // 高光
+  hlMoments.clear();
+
+  // 上一局的图片素材
+  if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
+  highlightImageUrls.value.forEach(u => { if (u) URL.revokeObjectURL(u); });
+  highlightImageUrls.value = [];
+
+  // 游戏逻辑
+  resetGame();
+  lastInterruptReason.value = null;
+}
+
 // ==================== 状态联动 ====================
 watch(state, (newState, oldState) => {
   if (newState === 'playing' && oldState !== 'playing') {
@@ -951,18 +975,10 @@ watch(state, (newState, oldState) => {
       startParticles();
       startTrail();
       playExpectedSyllable(stats.value.sequenceIndex);
-      lastPlayerVowelTime = 0;
       lastVowelInputTime = performance.now();
-      playerIntervals = [];
-      rawSpeedRatio.value = 1;
-      animationSpeedRatio.value = 1;
       // 启动 BGM
       bgm.setStage(game.currentStage.value);
       bgm.start();
-
-      // 清理上一局的素材
-      if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
-      hlMoments.clear();
     }
   }
   if (newState !== 'playing' && oldState === 'playing') {
@@ -988,7 +1004,7 @@ watch(state, (newState, oldState) => {
     const snap = snapshot.value;
     if (snap) {
       const textCfg = loadedPack.value?.textConfig;
-      shareCapture.generateShareImage(snap, undefined, textCfg).then((blob) => {
+      shareCapture.generateShareImage(snap, textCfg).then((blob) => {
         if (blob) {
           if (shareImageUrl.value) URL.revokeObjectURL(shareImageUrl.value);
           shareImageUrl.value = URL.createObjectURL(blob);
@@ -1029,8 +1045,7 @@ game.onScoreUpdate(() => {
 const switchDetector = (mode: DetectorMode) => {
   if (mode === detectorMode.value || state.value === 'playing' || state.value === 'ready' || state.value === 'paused') return;
   activeDetector.value.stop();
-  resetGame();
-  lastInterruptReason.value = null;
+  resetPlayState();
   detectorMode.value = mode;
 };
 
@@ -1099,18 +1114,10 @@ const handleQuitFromPause = () => {
 };
 
 const handleRestart = async () => {
-  isFainting.value = false;
-  // 清理分享素材
-  if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
-  highlightImageUrls.value.forEach(u => { if (u) URL.revokeObjectURL(u); });
-  highlightImageUrls.value = [];
-  hlMoments.clear();
-  resetGame();
+  resetPlayState();
   try {
     activeDetector.value.stop();
-    // 进入 ready 状态等待首音
     state.value = 'ready';
-    lastInterruptReason.value = null;
     await activeDetector.value.start();
   } catch (err) {
     console.error('重新启动失败', err);
@@ -1118,14 +1125,8 @@ const handleRestart = async () => {
 };
 
 const handleBackToIdle = () => {
-  isFainting.value = false;
-  if (shareImageUrl.value) { URL.revokeObjectURL(shareImageUrl.value); shareImageUrl.value = null; }
-  highlightImageUrls.value.forEach(u => { if (u) URL.revokeObjectURL(u); });
-  highlightImageUrls.value = [];
-  hlMoments.clear();
+  resetPlayState();
   activeDetector.value.stop();
-  resetGame();
-  lastInterruptReason.value = null;
 };
 
 // ==================== 初始化 ====================
@@ -1604,6 +1605,8 @@ onUnmounted(() => {
   text-align: center;
   display: flex; flex-direction: column;
   overflow-y: auto;
+  /* 让 pointer 事件穿透给 fan-track 处理拖拽 */
+  touch-action: none;
 }
 
 .result-icon { font-size: 44px; margin-bottom: 4px; }

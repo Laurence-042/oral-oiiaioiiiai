@@ -1,4 +1,5 @@
 import { ref } from 'vue';
+import QRCode from 'qrcode';
 import type { GameSnapshot, PackTextConfig, CopywritingVariant } from '@/types/game';
 
 /**
@@ -115,73 +116,48 @@ function roundRect(
 }
 
 /**
- * 生成简易 QR code（8-bit matrix 模式，纯 Canvas 绘制）
- * 由于不引入 QR 库，这里生成一个装饰性的伪 QR 码，
- * 中间嵌入 URL 文字（实际可扫描的 QR 需要引入 qrcode 库）
+ * 使用 qrcode 库生成真实可扫描的 QR 码，绘制到 Canvas 上
  */
-function drawQRPlaceholder(
+function drawQRCode(
   ctx: CanvasRenderingContext2D,
   x: number, y: number,
   size: number,
   url: string
 ) {
-  const cellCount = 21;
-  const cellSize = size / cellCount;
+  // 生成 QR 数据矩阵
+  const qr = QRCode.create(url, { errorCorrectionLevel: 'M' });
+  const modules = qr.modules;
+  const cellCount = modules.size;
+  const padding = 2; // quiet zone (单位: cell)
+  const totalCells = cellCount + padding * 2;
+  const cellSize = size / totalCells;
 
-  // 白色背景
+  // 白色背景 + 圆角
   ctx.fillStyle = '#ffffff';
-  roundRect(ctx, x, y, size, size, 6);
+  roundRect(ctx, x, y, size, size, 8);
   ctx.fill();
 
-  // 伪 QR 点阵 — 基于 URL 字符串的确定性 hash
+  // 绘制 QR 模块
   ctx.fillStyle = '#000000';
-  const seed = url.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
   for (let row = 0; row < cellCount; row++) {
     for (let col = 0; col < cellCount; col++) {
-      // 定位标记（三个角）
-      const isFinderTL = row < 7 && col < 7;
-      const isFinderTR = row < 7 && col >= cellCount - 7;
-      const isFinderBL = row >= cellCount - 7 && col < 7;
-      if (isFinderTL || isFinderTR || isFinderBL) {
-        // 绘制简化定位标记
-        const inBorder = row === 0 || row === 6 || col === 0 || col === 6 ||
-          (row >= (cellCount - 7) && (row === cellCount - 7 || row === cellCount - 1)) ||
-          (col >= (cellCount - 7) && (col === cellCount - 7 || col === cellCount - 1));
-        const inCenter = (row >= 2 && row <= 4 && col >= 2 && col <= 4) ||
-          (row >= 2 && row <= 4 && col >= cellCount - 5 && col <= cellCount - 3) ||
-          (row >= cellCount - 5 && row <= cellCount - 3 && col >= 2 && col <= 4);
-        if (inBorder || inCenter) {
-          ctx.fillRect(x + col * cellSize, y + row * cellSize, cellSize, cellSize);
-        }
-        continue;
-      }
-      // 数据区域
-      const hash = (seed * (row * cellCount + col + 1) * 7919) % 100;
-      if (hash < 40) {
-        ctx.fillRect(x + col * cellSize, y + row * cellSize, cellSize, cellSize);
+      if (modules.get(row, col)) {
+        ctx.fillRect(
+          x + (col + padding) * cellSize,
+          y + (row + padding) * cellSize,
+          cellSize,
+          cellSize
+        );
       }
     }
   }
-
-  // 中间嵌入小标签
-  const labelH = 10;
-  const labelW = size * 0.6;
-  const lx = x + (size - labelW) / 2;
-  const ly = y + (size - labelH) / 2;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(lx, ly, labelW, labelH);
-  ctx.fillStyle = '#000000';
-  ctx.font = `bold 7px sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('OIIAIOIIIAI', x + size / 2, ly + labelH / 2);
 }
 
 export interface ShareCaptureReturn {
   generating: ReturnType<typeof ref<boolean>>;
-  generateShareImage: (snap: GameSnapshot, siteUrl?: string, textConfig?: PackTextConfig) => Promise<Blob | null>;
-  downloadShareImage: (snap: GameSnapshot, siteUrl?: string, textConfig?: PackTextConfig) => Promise<void>;
-  copyShareImage: (snap: GameSnapshot, siteUrl?: string, textConfig?: PackTextConfig) => Promise<boolean>;
+  generateShareImage: (snap: GameSnapshot, textConfig?: PackTextConfig) => Promise<Blob | null>;
+  downloadShareImage: (snap: GameSnapshot, textConfig?: PackTextConfig) => Promise<void>;
+  copyShareImage: (snap: GameSnapshot, textConfig?: PackTextConfig) => Promise<boolean>;
 }
 
 /**
@@ -198,7 +174,8 @@ export function useShareCapture(): ShareCaptureReturn {
   /**
    * 生成分享图片 Blob
    */
-  async function generateShareImage(snap: GameSnapshot, siteUrl = 'https://oiiaioiiiai.com', textConfig?: PackTextConfig): Promise<Blob | null> {
+  async function generateShareImage(snap: GameSnapshot, textConfig?: PackTextConfig): Promise<Blob | null> {
+    const siteUrl = window.location.origin;
     generating.value = true;
     try {
       const W = 720;
@@ -351,7 +328,7 @@ export function useShareCapture(): ShareCaptureReturn {
       const qrSize = 100;
       const qrX = W / 2 - qrSize / 2;
       const qrY = H - 220;
-      drawQRPlaceholder(ctx, qrX, qrY, qrSize, siteUrl);
+      drawQRCode(ctx, qrX, qrY, qrSize, siteUrl);
 
       // URL 文字
       ctx.fillStyle = '#8b949e';
@@ -384,8 +361,8 @@ export function useShareCapture(): ShareCaptureReturn {
   /**
    * 生成并下载分享图片
    */
-  async function downloadShareImage(snap: GameSnapshot, siteUrl?: string, textConfig?: PackTextConfig): Promise<void> {
-    const blob = await generateShareImage(snap, siteUrl, textConfig);
+  async function downloadShareImage(snap: GameSnapshot, textConfig?: PackTextConfig): Promise<void> {
+    const blob = await generateShareImage(snap, textConfig);
     if (!blob) return;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -400,8 +377,8 @@ export function useShareCapture(): ShareCaptureReturn {
   /**
    * 生成并复制分享图片到剪贴板
    */
-  async function copyShareImage(snap: GameSnapshot, siteUrl?: string, textConfig?: PackTextConfig): Promise<boolean> {
-    const blob = await generateShareImage(snap, siteUrl, textConfig);
+  async function copyShareImage(snap: GameSnapshot, textConfig?: PackTextConfig): Promise<boolean> {
+    const blob = await generateShareImage(snap, textConfig);
     if (!blob) return false;
     try {
       await navigator.clipboard.write([
