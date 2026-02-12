@@ -57,11 +57,12 @@ const dragOffset = ref(0); // 拖拽中的像素偏移
 watch(() => props.initialIndex, (v) => { activeIndex.value = v; });
 
 // ── 扇形布局计算 ──
-const FAN_ANGLE = 8;           // 相邻卡片旋转角度差 (deg)
-const FAN_TRANSLATE_X = 40;    // 相邻卡片水平偏移 (%)
-const FAN_TRANSLATE_Y = 8;     // 相邻卡片垂直偏移 (px)
-const FAN_SCALE_STEP = 0.08;   // 相邻卡片缩放差
-const FAN_OPACITY_STEP = 0.25; // 相邻卡片透明度差
+const FAN_ANGLE = 6;           // 相邻卡片旋转角度差 (deg)
+const FAN_TRANSLATE_X = 38;    // 相邻卡片水平偏移 (%)
+const FAN_TRANSLATE_Y = 6;     // 相邻卡片垂直偏移 (px)
+const FAN_SCALE_STEP = 0.06;   // 相邻卡片缩放差
+const MIN_OPACITY = 0.35;      // 远处卡片最低透明度（露出边缘提示）
+const MAX_VISIBLE = 4;         // 最远可见卡片数
 
 function cardStyle(index: number) {
   const diff = index - activeIndex.value;
@@ -69,12 +70,14 @@ function cardStyle(index: number) {
   const dragFraction = dragOffset.value / 200; // 200px = 一张卡
   const visualDiff = diff + dragFraction;
 
+  const absDiff = Math.abs(visualDiff);
   const angle = visualDiff * FAN_ANGLE;
   const tx = visualDiff * FAN_TRANSLATE_X;
-  const ty = Math.abs(visualDiff) * FAN_TRANSLATE_Y;
-  const scale = Math.max(0.7, 1 - Math.abs(visualDiff) * FAN_SCALE_STEP);
-  const opacity = Math.max(0, 1 - Math.abs(visualDiff) * FAN_OPACITY_STEP);
-  const zIndex = 100 - Math.round(Math.abs(visualDiff) * 10);
+  const ty = absDiff * FAN_TRANSLATE_Y;
+  const scale = Math.max(0.7, 1 - absDiff * FAN_SCALE_STEP);
+  // 近处卡片正常渐隐，远处卡片保持最低透明度露出边缘
+  const opacity = absDiff > MAX_VISIBLE ? 0 : Math.max(MIN_OPACITY, 1 - absDiff * 0.2);
+  const zIndex = 100 - Math.round(absDiff * 10);
 
   return {
     transform: `translateX(${tx}%) translateY(${ty}px) rotate(${angle}deg) scale(${scale})`,

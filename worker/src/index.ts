@@ -58,7 +58,7 @@ const MAX_NAME_LENGTH = 20;
 const MAX_SCORE = 999_999;           // 理论单局极限
 const MIN_DURATION = 3_000;          // 至少 3 秒
 const MAX_DURATION = 30 * 60_000;    // 最多 30 分钟
-const RATE_LIMIT_SECONDS = 5;        // 同 IP 提交冷却
+const RATE_LIMIT_SECONDS = 60;       // 同 IP 提交冷却（KV expirationTtl 最小 60s）
 
 /* ---------- 工具函数 ---------- */
 
@@ -273,17 +273,22 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(origin) });
     }
 
-    // 路由
-    if (url.pathname === '/api/scores' && request.method === 'POST') {
-      return handleSubmit(request, env);
-    }
-    if (url.pathname === '/api/leaderboard' && request.method === 'GET') {
-      return handleLeaderboard(request, env);
-    }
-    if (url.pathname === '/api/stats' && request.method === 'GET') {
-      return handleStats(request, env);
-    }
+    try {
+      // 路由
+      if (url.pathname === '/api/scores' && request.method === 'POST') {
+        return await handleSubmit(request, env);
+      }
+      if (url.pathname === '/api/leaderboard' && request.method === 'GET') {
+        return await handleLeaderboard(request, env);
+      }
+      if (url.pathname === '/api/stats' && request.method === 'GET') {
+        return await handleStats(request, env);
+      }
 
-    return errorResponse('Not Found', 404, origin);
+      return errorResponse('Not Found', 404, origin);
+    } catch (err) {
+      console.error('Worker error:', err);
+      return errorResponse('服务器内部错误', 500, origin);
+    }
   },
 };

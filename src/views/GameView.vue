@@ -59,11 +59,69 @@
                   <span class="result-value">{{ formattedDuration }}</span>
                 </div>
               </div>
+
+              <!-- 排行榜提交（内嵌在结算卡中） -->
+              <div v-if="leaderboard.isAvailable.value" class="lb-submit-section">
+                <div v-if="leaderboard.submitResult.value" class="lb-submitted">
+                  <span>✅ 已上榜！{{ leaderboard.submitResult.value.rank ? `第 ${leaderboard.submitResult.value.rank} 名` : '' }}</span>
+                </div>
+                <div v-else class="lb-submit-row">
+                  <input
+                    v-model="leaderboard.nickname.value"
+                    class="lb-nickname-input"
+                    type="text"
+                    maxlength="20"
+                    placeholder="输入昵称上榜…"
+                    @keydown.enter="handleSubmitScore"
+                  />
+                  <button
+                    class="btn primary"
+                    :disabled="leaderboard.submitting.value || !leaderboard.nickname.value.trim()"
+                    @click="handleSubmitScore"
+                  >
+                    {{ leaderboard.submitting.value ? '…' : '🏆' }}
+                  </button>
+                </div>
+                <p v-if="leaderboard.error.value" class="lb-error">{{ leaderboard.error.value }}</p>
+              </div>
             </div>
           </template>
 
-          <!-- 卡片 2+: 高光时刻 -->
-          <template v-for="(hl, hi) in hlMoments.highlights.value" :key="hl.id" #['card-'+(hi+2)]>
+          <!-- 卡片 2: 排行榜 -->
+          <template v-if="leaderboard.isAvailable.value" #card-2>
+            <div class="fan-card-inner card-leaderboard">
+              <h3 class="lb-card-title">🏆 排行榜</h3>
+
+              <!-- 全局统计 -->
+              <div v-if="leaderboard.globalStats.value" class="lb-card-stats">
+                <span>{{ leaderboard.globalStats.value.totalPlays }} 人参与</span>
+                <span>·</span>
+                <span>累计 {{ leaderboard.globalStats.value.totalOiiia.toLocaleString() }} 次</span>
+              </div>
+
+              <div v-if="leaderboard.loading.value" class="lb-card-loading">
+                <div class="spinner"></div>
+              </div>
+              <div v-else-if="leaderboard.scores.value.length === 0" class="lb-card-empty">
+                还没有人上榜 🐱
+              </div>
+              <div v-else class="lb-card-list">
+                <div
+                  v-for="(entry, idx) in leaderboard.scores.value.slice(0, 15)"
+                  :key="entry.id"
+                  class="lb-card-row"
+                  :class="{ gold: idx === 0, silver: idx === 1, bronze: idx === 2 }"
+                >
+                  <span class="lb-card-rank">{{ idx === 0 ? '👑' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : (idx + 1) }}</span>
+                  <span class="lb-card-name">{{ entry.name }}</span>
+                  <span class="lb-card-score">{{ entry.score.toLocaleString() }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- 卡片 3+: 高光时刻 -->
+          <template v-for="(hl, hi) in hlMoments.highlights.value" :key="hl.id" #['card-'+(hi+hlCardStart)]>
             <div class="fan-card-inner card-highlight">
               <img
                 v-if="highlightImageUrls[hi]"
@@ -82,38 +140,8 @@
         <!-- 操作按钮 (在扇形卡片下方) -->
         <div class="result-actions">
           <p class="share-hint">👆 左右滑动查看更多 · 长按图片保存分享</p>
-
-          <!-- 排行榜提交 -->
-          <div v-if="leaderboard.isAvailable.value" class="lb-submit-section">
-            <div v-if="leaderboard.submitResult.value" class="lb-submitted">
-              <span class="lb-submitted-icon">✅</span>
-              <span>已上传！{{ leaderboard.submitResult.value.rank ? `排名第 ${leaderboard.submitResult.value.rank}` : '' }}</span>
-            </div>
-            <div v-else class="lb-submit-row">
-              <input
-                v-model="leaderboard.nickname.value"
-                class="lb-nickname-input"
-                type="text"
-                maxlength="20"
-                placeholder="输入昵称…"
-                @keydown.enter="handleSubmitScore"
-              />
-              <button
-                class="btn primary"
-                :disabled="leaderboard.submitting.value || !leaderboard.nickname.value.trim()"
-                @click="handleSubmitScore"
-              >
-                {{ leaderboard.submitting.value ? '提交中…' : '🏆 上榜' }}
-              </button>
-            </div>
-            <p v-if="leaderboard.error.value" class="lb-error">{{ leaderboard.error.value }}</p>
-          </div>
-
           <button class="btn primary large" @click="handleRestart">🔄 再来一次</button>
-          <div class="result-actions-row">
-            <button class="btn ghost" @click="handleBackToIdle">返回首页</button>
-            <button v-if="leaderboard.isAvailable.value" class="btn ghost" @click="$router.push('/leaderboard')">🏆 排行榜</button>
-          </div>
+          <button class="btn ghost" @click="handleBackToIdle">返回首页</button>
         </div>
       </div>
     </Transition>
@@ -399,9 +427,12 @@ const highlightImageUrls = ref<string[]>([]);
 const fanActiveIndex = ref(0);
 /** 结算扇形卡总数 */
 const fanCardCount = computed(() => {
-  // 分享图 + 结算卡 + 高光卡片数
-  return 1 + 1 + hlMoments.highlights.value.length;
+  // 分享图 + 结算卡 + 排行榜卡(可选) + 高光卡片数
+  const lbCard = leaderboard.isAvailable.value ? 1 : 0;
+  return 1 + 1 + lbCard + hlMoments.highlights.value.length;
 });
+/** 高光卡片起始索引（分享图+结算卡+排行榜卡） */
+const hlCardStart = computed(() => leaderboard.isAvailable.value ? 3 : 2);
 
 /** 生成所有高光卡片图片 */
 async function generateHighlightCards() {
@@ -1046,6 +1077,9 @@ watch(state, (newState, oldState) => {
         }
       });
       generateHighlightCards();
+      // 拉取排行榜数据
+      leaderboard.fetchLeaderboard(15);
+      leaderboard.fetchStats();
       fanActiveIndex.value = 1; // 默认显示结算卡
     }
   }
@@ -1168,7 +1202,12 @@ const handleBackToIdle = () => {
 const handleSubmitScore = async () => {
   const snap = snapshot.value;
   if (!snap) return;
-  await leaderboard.submitScore(leaderboard.nickname.value, snap, stats.value);
+  const result = await leaderboard.submitScore(leaderboard.nickname.value, snap, stats.value);
+  // 上榜成功后刷新排行榜数据
+  if (result) {
+    leaderboard.fetchLeaderboard(15);
+    leaderboard.fetchStats();
+  }
 };
 
 // ==================== 初始化 ====================
@@ -1676,10 +1715,6 @@ onUnmounted(() => {
   width: min(80vw, 320px);
   align-items: stretch;
 }
-.result-actions-row {
-  display: flex; gap: 8px;
-}
-.result-actions-row .btn { flex: 1; }
 .share-hint {
   font-size: 11px; color: #6e7681; text-align: center;
   animation: hint-fade 3s ease-in-out infinite;
@@ -1689,10 +1724,12 @@ onUnmounted(() => {
   50% { opacity: 1; }
 }
 
-/* 排行榜提交 */
+/* 排行榜提交（结算卡内嵌） */
 .lb-submit-section {
   display: flex; flex-direction: column; gap: 6px;
-  margin-bottom: 4px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255,255,255,0.08);
 }
 .lb-submit-row {
   display: flex; gap: 8px;
@@ -1712,12 +1749,64 @@ onUnmounted(() => {
 .lb-nickname-input:focus { border-color: rgba(255, 215, 0, 0.5); }
 .lb-submitted {
   display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 8px;
-  font-size: 14px; font-weight: 600;
+  padding: 4px;
+  font-size: 13px; font-weight: 600;
   color: #3fb950;
 }
 .lb-error {
   font-size: 12px; color: #f85149; text-align: center; margin: 0;
+}
+
+/* 排行榜卡片 */
+.card-leaderboard {
+  padding: 16px 14px;
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+  touch-action: none;
+}
+.lb-card-title {
+  font-size: 18px; font-weight: 700;
+  text-align: center; margin-bottom: 4px;
+}
+.lb-card-stats {
+  font-size: 11px; color: #8b949e;
+  text-align: center; margin-bottom: 12px;
+  display: flex; gap: 4px; justify-content: center;
+}
+.lb-card-loading, .lb-card-empty {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  color: #6e7681; font-size: 14px;
+}
+.lb-card-loading .spinner {
+  width: 24px; height: 24px;
+  border: 2px solid rgba(255,255,255,0.1);
+  border-top-color: #ffd700;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.lb-card-list {
+  display: flex; flex-direction: column; gap: 4px;
+  flex: 1;
+}
+.lb-card-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+  font-size: 13px;
+}
+.lb-card-row.gold { background: rgba(255,215,0,0.08); }
+.lb-card-row.silver { background: rgba(192,192,192,0.06); }
+.lb-card-row.bronze { background: rgba(205,127,50,0.06); }
+.lb-card-rank { min-width: 24px; text-align: center; font-size: 14px; }
+.lb-card-name {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 500;
+}
+.lb-card-score {
+  font-weight: 700; color: #ffd700;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ==================== 高光弹出提示 ==================== */

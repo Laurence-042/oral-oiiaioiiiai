@@ -410,7 +410,7 @@ interface StageConfig {
 - [x] 结算 UI — *CardFan 扇形卡片轮播（分享图 + 结算卡 + 高光卡），触摸/鼠标拖拽切换*
 - [x] 截图生成 — *Canvas 2D 分享卡，含阶段进度条、真实 QR 码（`qrcode` 库）、多变种文案*
 - [x] QR 码动态编码 — *`window.location.origin` 自动适配部署域名*
-- [x] 排行榜前端 UI — *`LeaderboardView.vue` 排名列表 + 全局统计；结算卡内嵌昵称提交*
+- [x] 排行榜前端 UI — *排行榜卡片内嵌 CardFan（Top 15 排名 + 全局统计）；结算卡内嵌昵称提交*
 - [x] 排行榜后端 (Cloudflare Workers KV) — *`worker/` 独立项目，POST 提交 + GET 排行 + GET 统计 + rate limit*
 - [ ] 自定义 BGM 模式（上传 + BPM 检测）
 
