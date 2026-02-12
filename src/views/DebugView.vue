@@ -444,6 +444,7 @@ import { ref, computed, reactive, onMounted, onUnmounted, nextTick, watch } from
 import { useVowelDetectorML } from '@/composables/useVowelDetectorML';
 import { useVowelDetector } from '@/composables/useVowelDetector';
 import { useGameState } from '@/composables/useGameState';
+import { useResourcePack } from '@/composables/useResourcePack';
 import { getTargetSequence, getPronunciationHints, getCurrentPreset } from '@/config/vowels';
 import type { Vowel, GameState, VowelDetectorHookReturn } from '@/types/game';
 
@@ -469,6 +470,9 @@ const error = computed(() => getDetector().error.value);
 const latestProbabilities = computed(() => getDetector().latestProbabilities.value);
 const debugData = computed(() => getDetector().debugData.value);
 
+// ==================== 资源包 ====================
+const { textConfig } = useResourcePack();
+
 // ==================== 游戏状态 ====================
 const {
   state: gameState,
@@ -481,7 +485,7 @@ const {
   onComboBreak,
   onPerfectCycle,
   onScoreUpdate
-} = useGameState();
+} = useGameState(textConfig);
 
 // ==================== 本地状态 ====================
 const showDebugInfo = ref(false);

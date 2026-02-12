@@ -1,5 +1,6 @@
-import { ref, type Ref } from 'vue';
-import type { Stage, PackTextConfig, HighlightLabelTemplates } from '@/types/game';
+import { ref, type ComputedRef, type Ref } from 'vue';
+import type { Stage, ResolvedPackTextConfig } from '@/types/game';
+import { getStageName as getStageNameFromConfig } from '@/config/stages';
 
 // ==================== 类型 ====================
 
@@ -47,19 +48,6 @@ const MAX_TOASTS = 3;
 /** 弹出提示持续时间 (ms) */
 const TOAST_DURATION = 2000;
 
-// ==================== 默认文案 ====================
-
-const DEFAULT_STAGE_NAMES = ['初醒', '躁动', '狂热', '超度', '神猫'];
-
-const DEFAULT_HIGHLIGHT_LABELS: HighlightLabelTemplates = {
-  'stage-up': '⬆ {stageName}',
-  'combo-milestone': '🔥 {combo} 连击',
-  'perfect-cycle': '✨ 完美循环 ×{count}',
-  'speed-burst': '⚡ 极速 {speed}/s',
-  'accuracy-streak': '🎯 精准 ×{count}',
-  'final': '🏁 最终时刻',
-};
-
 // ==================== Toast 类型 ====================
 
 export interface HighlightToast {
@@ -75,8 +63,6 @@ export interface UseHighlightsReturn {
   highlights: Ref<HighlightMoment[]>;
   /** 当前弹出的 toast 列表 */
   toasts: Ref<HighlightToast[]>;
-  /** 设置资源包文案配置 */
-  setTextConfig: (config: PackTextConfig) => void;
   /** 记录高光时刻（纯数据，零开销） */
   capture: (reason: HighlightReason, label: string, score: number, combo: number, stage: Stage) => void;
   /** 当阶段变化时自动判定 */
@@ -97,7 +83,7 @@ export interface UseHighlightsReturn {
   clear: () => void;
 }
 
-export function useHighlights(): UseHighlightsReturn {
+export function useHighlights(textConfig: ComputedRef<ResolvedPackTextConfig>): UseHighlightsReturn {
   const highlights = ref<HighlightMoment[]>([]);
   const toasts = ref<HighlightToast[]>([]);
   let nextId = 0;
@@ -108,21 +94,8 @@ export function useHighlights(): UseHighlightsReturn {
   /** 是否已触发过极速高光（每局只触发一次） */
   let firedSpeedBurst = false;
 
-  // 文案配置（从资源包加载或使用默认值）
-  let stageNames = DEFAULT_STAGE_NAMES;
-  let highlightLabels = { ...DEFAULT_HIGHLIGHT_LABELS };
-
-  function setTextConfig(config: PackTextConfig) {
-    if (config.stages?.length) {
-      stageNames = config.stages.map(s => s.name);
-    }
-    if (config.highlightLabels) {
-      highlightLabels = { ...DEFAULT_HIGHLIGHT_LABELS, ...config.highlightLabels };
-    }
-  }
-
   function getStageName(stage: Stage): string {
-    return stageNames[stage - 1] ?? `Stage ${stage}`;
+    return getStageNameFromConfig(stage, textConfig.value);
   }
 
   /** 格式化模板字符串 */
@@ -167,7 +140,7 @@ export function useHighlights(): UseHighlightsReturn {
 
   function onStageUp(from: Stage, to: Stage, score: number, combo: number) {
     if (to > from) {
-      const label = formatLabel(highlightLabels['stage-up'], { stageName: getStageName(to) });
+      const label = formatLabel(textConfig.value.highlightLabels['stage-up'], { stageName: getStageName(to) });
       capture('stage-up', label, score, combo, to);
     }
   }
@@ -176,7 +149,7 @@ export function useHighlights(): UseHighlightsReturn {
     for (const milestone of COMBO_MILESTONES) {
       if (combo >= milestone && !firedComboMilestones.has(milestone)) {
         firedComboMilestones.add(milestone);
-        const label = formatLabel(highlightLabels['combo-milestone'], { combo: milestone });
+        const label = formatLabel(textConfig.value.highlightLabels['combo-milestone'], { combo: milestone });
         capture('combo-milestone', label, score, combo, stage);
         break;
       }
@@ -184,7 +157,7 @@ export function useHighlights(): UseHighlightsReturn {
   }
 
   function onPerfectCycle(count: number, score: number, combo: number, stage: Stage) {
-    const label = formatLabel(highlightLabels['perfect-cycle'], { count });
+    const label = formatLabel(textConfig.value.highlightLabels['perfect-cycle'], { count });
     capture('perfect-cycle', label, score, combo, stage);
   }
 
@@ -194,7 +167,7 @@ export function useHighlights(): UseHighlightsReturn {
     if (avgIntervalMs > SPEED_BURST_THRESHOLD_MS || avgIntervalMs <= 0) return;
     firedSpeedBurst = true;
     const speed = (1000 / avgIntervalMs).toFixed(1);
-    const label = formatLabel(highlightLabels['speed-burst'], { speed });
+    const label = formatLabel(textConfig.value.highlightLabels['speed-burst'], { speed });
     capture('speed-burst', label, score, combo, stage);
   }
 
@@ -202,7 +175,7 @@ export function useHighlights(): UseHighlightsReturn {
     for (const milestone of ACCURACY_MILESTONES) {
       if (correctCount >= milestone && !firedAccuracyMilestones.has(milestone)) {
         firedAccuracyMilestones.add(milestone);
-        const label = formatLabel(highlightLabels['accuracy-streak'], { count: milestone });
+        const label = formatLabel(textConfig.value.highlightLabels['accuracy-streak'], { count: milestone });
         capture('accuracy-streak', label, score, correctCount, stage);
         break;
       }
@@ -210,7 +183,7 @@ export function useHighlights(): UseHighlightsReturn {
   }
 
   function captureFinal(score: number, combo: number, stage: Stage) {
-    const label = formatLabel(highlightLabels['final'], {});
+    const label = formatLabel(textConfig.value.highlightLabels['final'], {});
     capture('final', label, score, combo, stage);
   }
 
@@ -225,7 +198,6 @@ export function useHighlights(): UseHighlightsReturn {
   return {
     highlights,
     toasts,
-    setTextConfig,
     capture,
     onStageUp,
     onComboUpdate,

@@ -1,6 +1,6 @@
 import { ref } from 'vue';
 import QRCode from 'qrcode';
-import type { GameSnapshot, PackTextConfig, CopywritingVariant } from '@/types/game';
+import type { GameSnapshot, ResolvedPackTextConfig, CopywritingVariant } from '@/types/game';
 
 /**
  * 每个阶段的多变种文案池（默认 fallback）
@@ -49,14 +49,8 @@ const STAGE_COPYWRITING: Record<number, CopywritingVariant[]> = {
 };
 
 /**
- * 高连击/高循环的特殊文案
+ * 高连击/高循环的特殊文案（内置默认，已由 resolveTextConfig 提供）
  */
-const SPECIAL_COPYWRITING: CopywritingVariant[] = [
-  { title: '停不下来的节奏！', subtitle: '你的猫叫已经成为一种旋律' },
-  { title: '无限循环模式', subtitle: '对着猫叫，成为传说！' },
-  { title: '完美执行', subtitle: '你的 OIIIA 精准得可怕' },
-  { title: '人形猫叫机器', subtitle: '效率之王，精准之神' },
-];
 
 /**
  * 根据快照确定性地选一条文案（同一 snapshot 总是选到同一条，但不同 snapshot 选到不同的）
@@ -71,14 +65,14 @@ function pickVariant(variants: CopywritingVariant[], snap: GameSnapshot): Copywr
  * 根据阶段生成文案（含多变种随机）
  * 优先使用资源包提供的文案，fallback 到内置默认文案
  */
-export function generateCopywriting(snap: GameSnapshot, textConfig?: PackTextConfig): { title: string; subtitle: string } {
+export function generateCopywriting(snap: GameSnapshot, textConfig: ResolvedPackTextConfig): { title: string; subtitle: string } {
   // 特殊文案
   if (snap.perfectCycles >= 5 || snap.maxCombo >= 100) {
-    const specials = textConfig?.specialCopywriting ?? SPECIAL_COPYWRITING;
+    const specials = textConfig.specialCopywriting;
     return pickVariant(specials, snap);
   }
   // 阶段文案：优先资源包 stages[].copywriting
-  const packStage = textConfig?.stages?.[snap.stage - 1]?.copywriting;
+  const packStage = textConfig.stages[snap.stage - 1]?.copywriting;
   const variants = packStage ?? STAGE_COPYWRITING[snap.stage] ?? STAGE_COPYWRITING[1];
   return pickVariant(variants, snap);
 }
@@ -155,9 +149,9 @@ function drawQRCode(
 
 export interface ShareCaptureReturn {
   generating: ReturnType<typeof ref<boolean>>;
-  generateShareImage: (snap: GameSnapshot, textConfig?: PackTextConfig) => Promise<Blob | null>;
-  downloadShareImage: (snap: GameSnapshot, textConfig?: PackTextConfig) => Promise<void>;
-  copyShareImage: (snap: GameSnapshot, textConfig?: PackTextConfig) => Promise<boolean>;
+  generateShareImage: (snap: GameSnapshot, textConfig: ResolvedPackTextConfig) => Promise<Blob | null>;
+  downloadShareImage: (snap: GameSnapshot, textConfig: ResolvedPackTextConfig) => Promise<void>;
+  copyShareImage: (snap: GameSnapshot, textConfig: ResolvedPackTextConfig) => Promise<boolean>;
 }
 
 /**
@@ -174,7 +168,7 @@ export function useShareCapture(): ShareCaptureReturn {
   /**
    * 生成分享图片 Blob
    */
-  async function generateShareImage(snap: GameSnapshot, textConfig?: PackTextConfig): Promise<Blob | null> {
+  async function generateShareImage(snap: GameSnapshot, textConfig: ResolvedPackTextConfig): Promise<Blob | null> {
     const siteUrl = window.location.origin;
     generating.value = true;
     try {
@@ -271,7 +265,7 @@ export function useShareCapture(): ShareCaptureReturn {
 
       // 阶段指示器
       const stageBarY = statY + 60;
-      const stageNames = textConfig?.stages?.map(s => s.name) ?? ['初醒', '躁动', '狂热', '超度', '神猫'];
+      const stageNames = textConfig.stages.map(s => s.name);
       const stageBarW = cardW - 60;
       const stageBarX = cardX + 30;
       const dotGap = stageBarW / (stageNames.length - 1);
@@ -361,7 +355,7 @@ export function useShareCapture(): ShareCaptureReturn {
   /**
    * 生成并下载分享图片
    */
-  async function downloadShareImage(snap: GameSnapshot, textConfig?: PackTextConfig): Promise<void> {
+  async function downloadShareImage(snap: GameSnapshot, textConfig: ResolvedPackTextConfig): Promise<void> {
     const blob = await generateShareImage(snap, textConfig);
     if (!blob) return;
     const url = URL.createObjectURL(blob);
@@ -377,7 +371,7 @@ export function useShareCapture(): ShareCaptureReturn {
   /**
    * 生成并复制分享图片到剪贴板
    */
-  async function copyShareImage(snap: GameSnapshot, textConfig?: PackTextConfig): Promise<boolean> {
+  async function copyShareImage(snap: GameSnapshot, textConfig: ResolvedPackTextConfig): Promise<boolean> {
     const blob = await generateShareImage(snap, textConfig);
     if (!blob) return false;
     try {

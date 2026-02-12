@@ -94,9 +94,9 @@
 
               <!-- 全局统计 -->
               <div v-if="leaderboard.globalStats.value" class="lb-card-stats">
-                <span>{{ leaderboard.globalStats.value.totalPlays }} 人{{ loadedPack?.textConfig?.leaderboardText?.participateVerb ?? '参与' }}</span>
+                <span>{{ leaderboard.globalStats.value.totalPlays }} 人{{ textCfg.leaderboardText.participateVerb }}</span>
                 <span>·</span>
-                <span>累计{{ loadedPack?.textConfig?.leaderboardText?.unit ?? 'OIIIA' }} {{ leaderboard.globalStats.value.totalOiiia.toLocaleString() }} 次</span>
+                <span>累计{{ textCfg.leaderboardText.unit }} {{ leaderboard.globalStats.value.totalOiiia.toLocaleString() }} 次</span>
               </div>
 
               <div v-if="leaderboard.loading.value" class="lb-card-loading">
@@ -399,8 +399,22 @@ function positionTip(e: Event) {
   popup.style.left = `${left}px`;
 }
 
+// ==================== 资源包 ====================
+const resPack = useResourcePack();
+const {
+  loading: packLoading,
+  loadProgress: packProgress,
+  availablePacks,
+  currentPackId,
+  loadedPack,
+  sequence: packSequence,
+  textConfig: textCfg,
+} = resPack;
+
+const leaderboard = useLeaderboard(currentPackId);
+
 // ==================== 游戏状态 ====================
-const game = useGameState();
+const game = useGameState(textCfg);
 connectVowelDetectorToGameState(mlDetector, game);
 connectVowelDetectorToGameState(mfccDetector, game);
 
@@ -417,7 +431,7 @@ const bgm = useDynamicBGM();
 
 // ==================== 分享系统 ====================
 const shareCapture = useShareCapture();
-const hlMoments = useHighlights();
+const hlMoments = useHighlights(textCfg);
 const shareImageUrl = ref<string | null>(null);
 /** 高光卡片图片 URL 列表（与 hlMoments.highlights 一一对应） */
 const highlightImageUrls = ref<string[]>([]);
@@ -436,7 +450,7 @@ const hlCardStart = computed(() => leaderboard.isAvailable.value ? 3 : 2);
 async function generateHighlightCards() {
   const pack = loadedPack.value;
   if (!pack) return;
-  const stageNames = pack.textConfig.stages?.map(s => s.name) ?? ['初醒', '躁动', '狂热', '超度', '神猫'];
+  const stageNames = pack.textConfig.stages.map(s => s.name);
   const urls: string[] = [];
   for (const hl of hlMoments.highlights.value) {
     try {
@@ -459,20 +473,7 @@ async function generateHighlightCards() {
   highlightImageUrls.value = urls;
 }
 
-// ==================== 资源包 ====================
-const resPack = useResourcePack();
-const {
-  loading: packLoading,
-  loadProgress: packProgress,
-  availablePacks,
-  currentPackId,
-  loadedPack,
-  sequence: packSequence
-} = resPack;
-
-const leaderboard = useLeaderboard(currentPackId);
-
-// ==================== 序列滑动窗口 ====================
+// ==================== 序列滑动窗口 ========================================================
 const SEQ_PAST_COUNT = 2;    // 左侧已发过的音数
 const SEQ_FUTURE_COUNT = 4;  // 右侧即将发的音数
 
@@ -962,8 +963,7 @@ const lastInterruptReason = ref<InterruptReason | null>(null);
 const interruptCopy = computed(() => {
   const s = snapshot.value;
   if (!s) return { title: '游戏结束', subtitle: '' };
-  const textCfg = resPack.loadedPack.value?.textConfig;
-  return generateCopywriting(s, textCfg);
+  return generateCopywriting(s, textCfg.value);
 });
 
 const interruptIcon = computed(() => {
@@ -1069,8 +1069,7 @@ watch(state, (newState, oldState) => {
     // 自动生成分享图片 + 高光卡片
     const snap = snapshot.value;
     if (snap) {
-      const textCfg = loadedPack.value?.textConfig;
-      shareCapture.generateShareImage(snap, textCfg).then((blob) => {
+      shareCapture.generateShareImage(snap, textCfg.value).then((blob) => {
         if (blob) {
           if (shareImageUrl.value) URL.revokeObjectURL(shareImageUrl.value);
           shareImageUrl.value = URL.createObjectURL(blob);
@@ -1234,10 +1233,6 @@ onMounted(async () => {
 watch(loadedPack, (pack) => {
   if (pack?.bgmConfig) {
     bgm.init(pack.bgmConfig);
-  }
-  if (pack?.textConfig) {
-    hlMoments.setTextConfig(pack.textConfig);
-    game.setTextConfig(pack.textConfig);
   }
 });
 

@@ -1,4 +1,4 @@
-import { ref, computed, onUnmounted, type Ref, type ComputedRef } from 'vue';
+import { ref, computed, watch, onUnmounted, type Ref, type ComputedRef } from 'vue';
 import type {
   Vowel,
   GameState,
@@ -12,7 +12,7 @@ import type {
   ComboBreakCallback,
   PerfectCycleCallback,
   ScoreUpdateCallback,
-  PackTextConfig
+  ResolvedPackTextConfig,
 } from '@/types/game';
 import {
   calculateStage,
@@ -20,8 +20,9 @@ import {
   getStageCount,
   calculateComboMultiplier,
   TIMING_CONFIG,
-  SCORE_CONFIG
+  SCORE_CONFIG,
 } from '@/config/stages';
+
 import { getTargetSequence, isFuzzyMatch } from '@/config/vowels';
 
 /**
@@ -52,8 +53,6 @@ export interface UseGameStateReturn {
   setFreeMode: (config: Partial<FreeModeConfig>) => void;
   freeMode: Ref<FreeModeConfig>;
   
-  /** 资源包阶段配置 */
-  setTextConfig: (tc: PackTextConfig) => void;
   /** 当前阶段总数 */
   stageCount: ComputedRef<number>;
   
@@ -67,13 +66,13 @@ export interface UseGameStateReturn {
 /**
  * 创建初始游戏统计数据
  */
-function createInitialStats(): GameStats {
+function createInitialStats(stageName = ''): GameStats {
   return {
     score: 0,
     combo: 0,
     maxCombo: 0,
     stage: 1,
-    stageName: getStageName(1),
+    stageName,
     comboMultiplier: 1,
     perfectCycles: 0,
     sequenceIndex: 0,
@@ -96,7 +95,7 @@ function createInitialStats(): GameStats {
  * 
  * @example
  * ```ts
- * const { state, stats, startGame, processVowel, onStageChange } = useGameState();
+ * const { state, stats, startGame, processVowel, onStageChange } = useGameState(textConfig);
  * 
  * onStageChange((from, to) => {
  *   console.log(`Stage ${from} -> ${to}`);
@@ -106,7 +105,10 @@ function createInitialStats(): GameStats {
  * processVowel('O'); // 开始发音
  * ```
  */
-export function useGameState(config?: GameConfig): UseGameStateReturn {
+export function useGameState(
+  textConfig: ComputedRef<ResolvedPackTextConfig>,
+  config?: GameConfig,
+): UseGameStateReturn {
   // ==================== 配置合并 ====================
   const cfg = {
     silenceTimeout: TIMING_CONFIG.SILENCE_TIMEOUT,
@@ -121,7 +123,7 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
 
   // ==================== 响应式状态 ====================
   const state = ref<GameState>('idle');
-  const stats = ref<GameStats>(createInitialStats());
+  const stats = ref<GameStats>(createInitialStats(getStageName(1, textConfig.value)));
   const snapshot = ref<GameSnapshot | null>(null);
   
   const freeMode = ref<FreeModeConfig>({
@@ -133,9 +135,12 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     effectIntensity: undefined
   });
 
-  /** 资源包提供的阶段配置 */
-  const textConfig = ref<PackTextConfig>({});
   const stageCount = computed(() => getStageCount(textConfig.value));
+
+  // 资源包切换时刷新 stageName
+  watch(textConfig, (tc) => {
+    stats.value.stageName = getStageName(stats.value.stage, tc);
+  });
 
   // ==================== 计算属性 ====================
   const currentStage = computed<Stage>(() => {
@@ -361,7 +366,7 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     if (state.value === 'playing') return;
     
     // 重置统计（但保留自由模式设置）
-    stats.value = createInitialStats();
+    stats.value = createInitialStats(getStageName(1, textConfig.value));
     stats.value.startTime = Date.now();
     hasFirstVowel = false;
     
@@ -470,16 +475,6 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     }
   }
 
-  /**
-   * 设置资源包文案 / 阶段配置
-   * 更新 textConfig 后，如果正在游戏中会立即刷新 stageName
-   */
-  function setTextConfig(tc: PackTextConfig): void {
-    textConfig.value = tc;
-    // 刷新当前 stageName（阶段编号不变，名称可能变了）
-    stats.value.stageName = getStageName(stats.value.stage, tc);
-  }
-
   // ==================== 生命周期 ====================
   onUnmounted(() => {
     if (silenceCheckInterval) {
@@ -505,7 +500,6 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
     reset,
     setFreeMode,
     freeMode,
-    setTextConfig,
     stageCount,
     onStageChange,
     onComboBreak,
@@ -520,7 +514,7 @@ export function useGameState(config?: GameConfig): UseGameStateReturn {
  * @example
  * ```ts
  * const vowelDetector = useVowelDetector();
- * const gameState = useGameState();
+ * const gameState = useGameState(textConfig);
  * 
  * // 自动连接两个 composable
  * connectVowelDetectorToGameState(vowelDetector, gameState);

@@ -1,5 +1,64 @@
 import { ref, computed, shallowRef } from 'vue';
-import type { Vowel, BGMConfig, PackTextConfig } from '@/types/game';
+import type {
+  Vowel,
+  BGMConfig,
+  PackTextConfig,
+  ResolvedPackTextConfig,
+  HighlightLabelTemplates,
+  CopywritingVariant,
+  PackStageConfig,
+  LeaderboardTextConfig,
+} from '@/types/game';
+
+// ==================== 文案配置默认值 ====================
+
+/** 默认阶段配置 */
+export const DEFAULT_STAGES: PackStageConfig[] = [
+  { name: '初醒', scoreThreshold: 0 },
+  { name: '躁动', scoreThreshold: 100 },
+  { name: '狂热', scoreThreshold: 200 },
+  { name: '超度', scoreThreshold: 300 },
+  { name: '神猫', scoreThreshold: 400 },
+];
+
+/** 默认高光标签 */
+export const DEFAULT_HIGHLIGHT_LABELS: HighlightLabelTemplates = {
+  'stage-up': '⬆ {stageName}',
+  'combo-milestone': '🔥 {combo} 连击',
+  'perfect-cycle': '✨ 完美循环 ×{count}',
+  'speed-burst': '⚡ 极速 {speed}/s',
+  'accuracy-streak': '🎯 精准 ×{count}',
+  'final': '🏁 最终时刻',
+};
+
+/** 默认特殊文案 */
+export const DEFAULT_SPECIAL_COPYWRITING: CopywritingVariant[] = [
+  { title: '停不下来的节奏！', subtitle: '你的猫叫已经成为一种旋律' },
+  { title: '无限循环模式', subtitle: '对着猫叫，成为传说！' },
+  { title: '完美执行', subtitle: '你的 OIIIA 精准得可怕' },
+  { title: '人形猫叫机器', subtitle: '效率之王，精准之神' },
+];
+
+/** 默认排行榜文案 */
+export const DEFAULT_LEADERBOARD_TEXT: LeaderboardTextConfig = {
+  unit: 'OIIIA',
+  participateVerb: '参与',
+};
+
+/**
+ * 将可选的 PackTextConfig 解析为所有字段都有值的 ResolvedPackTextConfig
+ */
+export function resolveTextConfig(raw?: PackTextConfig): ResolvedPackTextConfig {
+  return {
+    stages: raw?.stages?.length ? raw.stages : DEFAULT_STAGES,
+    highlightLabels: { ...DEFAULT_HIGHLIGHT_LABELS, ...raw?.highlightLabels },
+    specialCopywriting: raw?.specialCopywriting?.length ? raw.specialCopywriting : DEFAULT_SPECIAL_COPYWRITING,
+    leaderboardText: {
+      ...DEFAULT_LEADERBOARD_TEXT,
+      ...raw?.leaderboardText,
+    },
+  };
+}
 
 // ==================== 类型定义 ====================
 
@@ -33,7 +92,7 @@ export interface LoadedResourcePack {
   animationFrames: HTMLImageElement[];  // 其余帧 (循环帧)
   totalSyllableDuration: number;        // 所有音节时长之和 (秒)
   bgmConfig: BGMConfig | null;          // 动态 BGM 配置（可选）
-  textConfig: PackTextConfig;           // 文案配置（manifest 中的或空对象）
+  textConfig: ResolvedPackTextConfig;    // 文案配置（已解析，所有字段有值）
 }
 
 /** 资源包摘要 (未加载，仅元信息) */
@@ -68,6 +127,10 @@ export function useResourcePack() {
 
   const isLoaded = computed(() => !!loadedPack.value);
   const sequence = computed<Vowel[]>(() => loadedPack.value?.manifest.sequence ?? []);
+  /** 已解析的文案配置（始终有值，未加载资源包时使用默认值） */
+  const textConfig = computed<ResolvedPackTextConfig>(() =>
+    loadedPack.value?.textConfig ?? resolveTextConfig()
+  );
 
   // 共享 AudioContext (懒创建)
   let audioCtx: AudioContext | null = null;
@@ -179,7 +242,7 @@ export function useResourcePack() {
         animationFrames,
         totalSyllableDuration,
         bgmConfig,
-        textConfig: manifest.textConfig ?? {}
+        textConfig: resolveTextConfig(manifest.textConfig)
       };
 
       loadedPack.value = pack;
@@ -240,6 +303,7 @@ export function useResourcePack() {
     loadedPack,
     isLoaded,
     sequence,
+    textConfig,
 
     // 方法
     fetchAvailablePacks,

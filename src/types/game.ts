@@ -311,7 +311,7 @@ export interface LeaderboardTextConfig {
   /** 统计单位 (如 "猫叫"、"OIIIA") */
   unit: string;
   /** "xx 人参与" 的动词 (默认 "参与") */
-  participateVerb?: string;
+  participateVerb: string;
 }
 
 /** 资源包文案配置 (全部可选，有默认 fallback) */
@@ -324,6 +324,14 @@ export interface PackTextConfig {
   specialCopywriting?: CopywritingVariant[];
   /** 排行榜文案配置 */
   leaderboardText?: LeaderboardTextConfig;
+}
+
+/** 解析后的资源包文案配置（所有字段都已填充默认值） */
+export interface ResolvedPackTextConfig {
+  stages: PackStageConfig[];
+  highlightLabels: HighlightLabelTemplates;
+  specialCopywriting: CopywritingVariant[];
+  leaderboardText: LeaderboardTextConfig;
 }
 
 // ==================== 事件回调类型 ====================

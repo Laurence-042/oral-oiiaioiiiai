@@ -1,4 +1,9 @@
-import type { Stage, StageThreshold, StageVisualConfig, PackTextConfig } from '@/types/game';
+import type {
+  Stage,
+  StageThreshold,
+  StageVisualConfig,
+  ResolvedPackTextConfig,
+} from '@/types/game';
 
 /** 默认阶段名 */
 export const DEFAULT_STAGE_NAMES = ['初醒', '躁动', '狂热', '超度', '神猫'];
@@ -16,19 +21,17 @@ export const STAGE_THRESHOLDS: StageThreshold[] = DEFAULT_STAGE_NAMES.map((name,
   scoreThreshold: DEFAULT_SCORE_THRESHOLDS[i]
 }));
 
-/** 从 PackTextConfig.stages 提取阶段名数组 */
-export function resolveStageNames(textConfig?: PackTextConfig): string[] {
-  return textConfig?.stages?.map(s => s.name) ?? DEFAULT_STAGE_NAMES;
+/** 从 ResolvedPackTextConfig.stages 提取阶段名数组 */
+export function resolveStageNames(textConfig: ResolvedPackTextConfig): string[] {
+  return textConfig.stages.map(s => s.name);
 }
 
 /**
  * 从 PackTextConfig 构建阶段阈值表
  * 如果资源包提供了 stages，则覆盖默认值
  */
-export function resolveStageThresholds(textConfig?: PackTextConfig): StageThreshold[] {
-  const stages = textConfig?.stages;
-  if (!stages?.length) return STAGE_THRESHOLDS;
-  return stages.map((s, i) => ({
+export function resolveStageThresholds(textConfig: ResolvedPackTextConfig): StageThreshold[] {
+  return textConfig.stages.map((s, i) => ({
     stage: (i + 1) as Stage,
     name: s.name,
     scoreThreshold: s.scoreThreshold
@@ -36,8 +39,8 @@ export function resolveStageThresholds(textConfig?: PackTextConfig): StageThresh
 }
 
 /** 资源包定义的阶段总数（默认 5） */
-export function getStageCount(textConfig?: PackTextConfig): number {
-  return (textConfig?.stages ?? DEFAULT_STAGE_NAMES).length;
+export function getStageCount(textConfig: ResolvedPackTextConfig): number {
+  return textConfig.stages.length;
 }
 
 /**
@@ -45,7 +48,7 @@ export function getStageCount(textConfig?: PackTextConfig): number {
  * @param score 当前分数
  * @param textConfig 资源包配置（可选，用于自定义阶段阈值）
  */
-export function calculateStage(score: number, textConfig?: PackTextConfig): Stage {
+export function calculateStage(score: number, textConfig: ResolvedPackTextConfig): Stage {
   const thresholds = resolveStageThresholds(textConfig);
   for (let i = thresholds.length - 1; i >= 0; i--) {
     if (score >= thresholds[i].scoreThreshold) {
@@ -60,7 +63,7 @@ export function calculateStage(score: number, textConfig?: PackTextConfig): Stag
  * @param stage 阶段编号 (1-based)
  * @param textConfig 资源包配置（可选）
  */
-export function getStageName(stage: Stage, textConfig?: PackTextConfig): string {
+export function getStageName(stage: Stage, textConfig: ResolvedPackTextConfig): string {
   const names = resolveStageNames(textConfig);
   return names[stage - 1] ?? `Stage ${stage}`;
 }
@@ -231,7 +234,7 @@ export function getStageVisualConfig(stage: Stage): StageVisualConfig {
 /**
  * 根据分数获取视觉配置
  */
-export function getVisualConfigByScore(score: number, textConfig?: PackTextConfig): StageVisualConfig {
+export function getVisualConfigByScore(score: number, textConfig: ResolvedPackTextConfig): StageVisualConfig {
   const stage = calculateStage(score, textConfig);
   return getStageVisualConfig(stage);
 }
