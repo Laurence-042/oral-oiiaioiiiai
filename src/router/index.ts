@@ -36,6 +36,12 @@ const router = createRouter({
       name: 'game',
       component: () => import('@/views/GameView.vue'),
       meta: { title: 'OIIAIOIIIAI' }
+    },
+    {
+      path: '/leaderboard',
+      name: 'leaderboard',
+      component: () => import('@/views/LeaderboardView.vue'),
+      meta: { title: '排行榜' }
     }
   ]
 });

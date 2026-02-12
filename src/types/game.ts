@@ -338,3 +338,49 @@ export type ScoreUpdateCallback = (score: number, delta: number) => void;
 
 /** 错误回调 */
 export type ErrorCallback = (error: Error) => void;
+
+// ==================== 排行榜类型 ====================
+
+/** 排行榜单条记录 */
+export interface LeaderboardEntry {
+  id: string;
+  name: string;
+  score: number;
+  maxCombo: number;
+  stage: number;
+  stageName: string;
+  perfectCycles: number;
+  duration: number;
+  totalVowels: number;
+  correctVowels: number;
+  createdAt: number;
+}
+
+/** 全局统计 */
+export interface LeaderboardStats {
+  totalPlays: number;
+  totalOiiia: number;
+  highestScore: number;
+  updatedAt: number;
+}
+
+/** 提交分数请求体 */
+export interface ScoreSubmitPayload {
+  name: string;
+  score: number;
+  maxCombo: number;
+  stage: number;
+  stageName: string;
+  perfectCycles: number;
+  duration: number;
+  totalVowels: number;
+  correctVowels: number;
+}
+
+/** 提交分数响应 */
+export interface ScoreSubmitResponse {
+  ok: boolean;
+  id: string;
+  rank: number | null;
+  stats: LeaderboardStats;
+}

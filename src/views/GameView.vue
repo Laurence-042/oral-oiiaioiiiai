@@ -82,8 +82,38 @@
         <!-- 操作按钮 (在扇形卡片下方) -->
         <div class="result-actions">
           <p class="share-hint">👆 左右滑动查看更多 · 长按图片保存分享</p>
+
+          <!-- 排行榜提交 -->
+          <div v-if="leaderboard.isAvailable.value" class="lb-submit-section">
+            <div v-if="leaderboard.submitResult.value" class="lb-submitted">
+              <span class="lb-submitted-icon">✅</span>
+              <span>已上传！{{ leaderboard.submitResult.value.rank ? `排名第 ${leaderboard.submitResult.value.rank}` : '' }}</span>
+            </div>
+            <div v-else class="lb-submit-row">
+              <input
+                v-model="leaderboard.nickname.value"
+                class="lb-nickname-input"
+                type="text"
+                maxlength="20"
+                placeholder="输入昵称…"
+                @keydown.enter="handleSubmitScore"
+              />
+              <button
+                class="btn primary"
+                :disabled="leaderboard.submitting.value || !leaderboard.nickname.value.trim()"
+                @click="handleSubmitScore"
+              >
+                {{ leaderboard.submitting.value ? '提交中…' : '🏆 上榜' }}
+              </button>
+            </div>
+            <p v-if="leaderboard.error.value" class="lb-error">{{ leaderboard.error.value }}</p>
+          </div>
+
           <button class="btn primary large" @click="handleRestart">🔄 再来一次</button>
-          <button class="btn ghost" @click="handleBackToIdle">返回首页</button>
+          <div class="result-actions-row">
+            <button class="btn ghost" @click="handleBackToIdle">返回首页</button>
+            <button v-if="leaderboard.isAvailable.value" class="btn ghost" @click="$router.push('/leaderboard')">🏆 排行榜</button>
+          </div>
         </div>
       </div>
     </Transition>
@@ -298,6 +328,7 @@ import { useDynamicBGM } from '@/composables/useDynamicBGM';
 import { useShareCapture, generateCopywriting } from '@/composables/useShareCapture';
 import { useHighlights } from '@/composables/useHighlights';
 import { renderHighlightCard } from '@/composables/useHighlightRenderer';
+import { useLeaderboard } from '@/composables/useLeaderboard';
 import CardFan from '@/components/CardFan.vue';
 import { getStageVisualConfig } from '@/config/stages';
 import { isFuzzyMatch } from '@/config/vowels';
@@ -360,6 +391,7 @@ const bgm = useDynamicBGM();
 // ==================== 分享系统 ====================
 const shareCapture = useShareCapture();
 const hlMoments = useHighlights();
+const leaderboard = useLeaderboard();
 const shareImageUrl = ref<string | null>(null);
 /** 高光卡片图片 URL 列表（与 hlMoments.highlights 一一对应） */
 const highlightImageUrls = ref<string[]>([]);
@@ -952,6 +984,9 @@ function resetPlayState() {
   highlightImageUrls.value.forEach(u => { if (u) URL.revokeObjectURL(u); });
   highlightImageUrls.value = [];
 
+  // 排行榜
+  leaderboard.resetSubmit();
+
   // 游戏逻辑
   resetGame();
   lastInterruptReason.value = null;
@@ -1127,6 +1162,13 @@ const handleRestart = async () => {
 const handleBackToIdle = () => {
   resetPlayState();
   activeDetector.value.stop();
+};
+
+/** 提交分数到排行榜 */
+const handleSubmitScore = async () => {
+  const snap = snapshot.value;
+  if (!snap) return;
+  await leaderboard.submitScore(leaderboard.nickname.value, snap, stats.value);
 };
 
 // ==================== 初始化 ====================
@@ -1634,6 +1676,10 @@ onUnmounted(() => {
   width: min(80vw, 320px);
   align-items: stretch;
 }
+.result-actions-row {
+  display: flex; gap: 8px;
+}
+.result-actions-row .btn { flex: 1; }
 .share-hint {
   font-size: 11px; color: #6e7681; text-align: center;
   animation: hint-fade 3s ease-in-out infinite;
@@ -1641,6 +1687,37 @@ onUnmounted(() => {
 @keyframes hint-fade {
   0%, 100% { opacity: 0.6; }
   50% { opacity: 1; }
+}
+
+/* 排行榜提交 */
+.lb-submit-section {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-bottom: 4px;
+}
+.lb-submit-row {
+  display: flex; gap: 8px;
+}
+.lb-nickname-input {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e6edf3;
+  font-size: 14px;
+  outline: none;
+  min-width: 0;
+}
+.lb-nickname-input::placeholder { color: rgba(255,255,255,0.3); }
+.lb-nickname-input:focus { border-color: rgba(255, 215, 0, 0.5); }
+.lb-submitted {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 8px;
+  font-size: 14px; font-weight: 600;
+  color: #3fb950;
+}
+.lb-error {
+  font-size: 12px; color: #f85149; text-align: center; margin: 0;
 }
 
 /* ==================== 高光弹出提示 ==================== */
