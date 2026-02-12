@@ -14,12 +14,6 @@ const router = createRouter({
       meta: { title: '元音识别调试' }
     },
     {
-      path: '/debug-ml',
-      name: 'debug-ml',
-      component: () => import('@/views/DebugMLDetector.vue'),
-      meta: { title: '元音识别调试-ML' }
-    },
-    {
       path: '/analyzer',
       name: 'analyzer',
       component: () => import('@/views/AudioAnalyzer.vue'),

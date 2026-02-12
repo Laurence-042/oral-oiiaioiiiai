@@ -393,7 +393,6 @@ function positionTip(e: Event) {
   if (!trigger || !popup) return;
   const rect = trigger.getBoundingClientRect();
   const pw = 220; // tip-popup width
-  // 向左展开，顶部对齐触发器底部
   let left = rect.right - pw;
   if (left < 8) left = 8;
   popup.style.top = `${rect.bottom + 8}px`;

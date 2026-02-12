@@ -16,6 +16,9 @@ import { DEFAULT_VOWEL_DETECTOR_CONFIG, DEFAULT_VOWEL_FORMANTS } from '@/config/
 const VOWEL_CLASSES = ['A', 'E', 'I', 'O', 'U', 'silence'] as const;
 const INPUT_SAMPLES = 3360; // 210ms @ 16kHz
 const TARGET_SAMPLE_RATE = 16000; // 训练模型使用的采样率
+
+// Vite 会将 TS worker 编译打包，返回可用 URL
+const workletUrl = new URL('../workers/vowelAudioProcessor.ts', import.meta.url);
 const HYSTERESIS_HIGH = 0.6;
 const HYSTERESIS_LOW = 0.45;
 const SWITCH_MARGIN = 0.08;
@@ -64,12 +67,11 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
   // ==================== 内部状态 ====================
   let audioContext: AudioContext | null = null;
   let mediaStream: MediaStream | null = null;
+  let workletNode: AudioWorkletNode | null = null;
   let model: tf.GraphModel | null = null;
-  let audioBuffer: Float32Array | null = null;
-  let bufferIndex = 0;
+  let pendingAudioBuffer: Float32Array | null = null; // 最新一帧来自 AudioWorklet
   let animationFrameId: number | null = null;
-  let actualSampleRate = 44100; // 实际采样率（会在初始化时检测）
-  let resampleRatio = 1; // 重采样比例
+  let actualSampleRate = 44100;
   
   // 元音检测状态
   let lastConfirmedVowel: Vowel | null = null;
@@ -136,58 +138,35 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
         }
       });
 
-      // 创建音频上下文（不指定采样率，让系统使用默认值）
-      audioContext = new AudioContext();
-      
-      // ⚠️ 关键：获取实际采样率
-      actualSampleRate = audioContext.sampleRate;
-      resampleRatio = TARGET_SAMPLE_RATE / actualSampleRate;
-      
-      console.log(`📊 实际采样率: ${actualSampleRate} Hz`);
-      console.log(`📊 目标采样率: ${TARGET_SAMPLE_RATE} Hz`);
-      console.log(`📊 重采样比例: ${resampleRatio.toFixed(4)}`);
-      
-      // 计算重采样后的缓冲区大小
-      // 如果实际采样率是 44100Hz，重采样到 16000Hz 后，
-      // 每个 4096 样本的音频块会变成 ~1495 样本
-      // 创建音频缓冲区（用于存储重采样后的数据）
-      audioBuffer = new Float32Array(INPUT_SAMPLES);
-      bufferIndex = 0;
+      // 创建音频上下文（iOS Safari 兼容：webkit 前缀）
+      const AudioCtx = window.AudioContext ?? (window as unknown as Record<string, unknown>).webkitAudioContext as typeof AudioContext;
+      audioContext = new AudioCtx();
 
-      // 创建 ScriptProcessorNode 用于收集音频数据
-      // 使用 2048 样本的缓冲大小，降低延迟（~46ms @ 44100Hz）
-      const scriptNode = audioContext.createScriptProcessor(2048, 1, 1);
-      
-      scriptNode.onaudioprocess = (event: AudioProcessingEvent) => {
-        const inputData = event.inputBuffer.getChannelData(0);
-        
-        // ⚠️ 正确的重采样：从高采样率降到低采样率
-        // 例如：44100Hz -> 16000Hz，每 2.76 个源样本产生 1 个目标样本
-        const resampledLength = Math.ceil(inputData.length * resampleRatio);
-        
-        for (let i = 0; i < resampledLength; i++) {
-          // 计算在源数组中的位置
-          const sourcePos = i / resampleRatio;
-          const intPart = Math.floor(sourcePos);
-          const fracPart = sourcePos - intPart;
-          
-          // 线性插值
-          let sample: number;
-          if (intPart >= inputData.length - 1) {
-            sample = inputData[inputData.length - 1];
-          } else {
-            sample = inputData[intPart] * (1 - fracPart) + inputData[intPart + 1] * fracPart;
-          }
-          
-          // 将重采样后的数据放入主缓冲区（循环缓冲）
-          audioBuffer![bufferIndex] = sample;
-          bufferIndex = (bufferIndex + 1) % INPUT_SAMPLES;
+      // iOS Safari: AudioContext 初始创建时可能是 suspended 状态
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+
+      actualSampleRate = audioContext.sampleRate;
+      console.log(`📊 实际采样率: ${actualSampleRate} Hz`);
+
+      // 注册 AudioWorklet（运行在独立音频线程，不阻塞主线程）
+      await audioContext.audioWorklet.addModule(workletUrl);
+
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      workletNode = new AudioWorkletNode(audioContext, 'vowel-audio-processor');
+
+      // 接收 AudioWorklet 线程发来的重采样音频数据
+      workletNode.port.onmessage = (e: MessageEvent) => {
+        if (e.data?.type === 'audio') {
+          pendingAudioBuffer = e.data.buffer as Float32Array;
         }
       };
 
-      const source = audioContext.createMediaStreamSource(mediaStream);
-      source.connect(scriptNode);
-      scriptNode.connect(audioContext.destination);
+      source.connect(workletNode);
+      // AudioWorklet 不需要连接到 destination（不播放）
+      // 但某些浏览器需要连一个 sink 才能持续运行
+      workletNode.connect(audioContext.destination);
 
       isInitialized.value = true;
       error.value = null;
@@ -201,19 +180,19 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
 
   // ==================== 音频预处理和推理 ====================
   async function analyzeAudio(): Promise<void> {
-    if (!model || !audioBuffer || !isListening.value) return;
+    if (!model || !isListening.value) return;
+
+    // 如果没有新的音频帧，跳过本轮
+    const audioData = pendingAudioBuffer;
+    if (!audioData) {
+      animationFrameId = requestAnimationFrame(analyzeAudio);
+      return;
+    }
+    pendingAudioBuffer = null; // 消费掉
 
     const now = performance.now();
 
     try {
-      // 从循环缓冲区正确读取数据
-      // audioBuffer 是循环缓冲区，bufferIndex 指向下一个要写入的位置
-      // 正确的顺序是：[bufferIndex...end] + [0...bufferIndex-1]
-      const audioData = new Float32Array(INPUT_SAMPLES);
-      for (let i = 0; i < INPUT_SAMPLES; i++) {
-        // 从 bufferIndex 开始读取，回绕到开头
-        audioData[i] = audioBuffer[(bufferIndex + i) % INPUT_SAMPLES];
-      }
 
       // 计算音量
       const volume = calculateVolume(audioData);
@@ -393,7 +372,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
 
     isListening.value = true;
     silenceStartTime = null;
-    bufferIndex = 0;
+    pendingAudioBuffer = null;
     
     // 开始分析循环
     analyzeAudio();
@@ -434,8 +413,13 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
       model = null;
     }
 
-    audioBuffer = null;
-    bufferIndex = 0;
+    if (workletNode) {
+      workletNode.disconnect();
+      workletNode.port.onmessage = null;
+      workletNode = null;
+    }
+
+    pendingAudioBuffer = null;
     
     isInitialized.value = false;
     currentResult.value = null;
@@ -453,11 +437,10 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
       detectorType: 'ml',
       targetSampleRate: TARGET_SAMPLE_RATE,
       actualSampleRate: actualSampleRate,
-      resampleRatio: resampleRatio,
       inputSamples: INPUT_SAMPLES,
       expectedDurationMs: (INPUT_SAMPLES / TARGET_SAMPLE_RATE) * 1000,
-      actualDurationMs: (INPUT_SAMPLES / actualSampleRate) * 1000,
       audioContextState: audioContext?.state,
+      audioProcessing: 'AudioWorklet',
       silenceThreshold: cfg.silenceThreshold,
       modelPath: config?.modelPath ?? '/models/vowel/model.json',
       isInitialized: isInitialized.value,
