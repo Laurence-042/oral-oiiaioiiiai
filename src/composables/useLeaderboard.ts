@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue';
+import { ref, computed, type Ref } from 'vue';
 import type {
   LeaderboardEntry,
   LeaderboardStats,
@@ -40,7 +40,7 @@ function saveNickname(name: string) {
 
 /* ---------- composable ---------- */
 
-export function useLeaderboard() {
+export function useLeaderboard(packId: Ref<string>) {
   const isAvailable = computed(() => !!API_BASE);
 
   // 排行榜数据
@@ -60,7 +60,7 @@ export function useLeaderboard() {
     loading.value = true;
     error.value = null;
     try {
-      const res = await fetch(`${API_BASE}/api/leaderboard?limit=${limit}`);
+      const res = await fetch(`${API_BASE}/api/leaderboard?limit=${limit}&packId=${encodeURIComponent(packId.value)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       scores.value = data.scores;
@@ -75,7 +75,7 @@ export function useLeaderboard() {
   async function fetchStats() {
     if (!API_BASE) return;
     try {
-      const res = await fetch(`${API_BASE}/api/stats`);
+      const res = await fetch(`${API_BASE}/api/stats?packId=${encodeURIComponent(packId.value)}`);
       if (!res.ok) return;
       globalStats.value = await res.json();
     } catch { /* silent */ }
@@ -85,6 +85,7 @@ export function useLeaderboard() {
   function buildPayload(name: string, snap: GameSnapshot, stats: GameStats): ScoreSubmitPayload {
     return {
       name,
+      packId: packId.value,
       score: snap.score,
       maxCombo: snap.maxCombo,
       stage: snap.stage,

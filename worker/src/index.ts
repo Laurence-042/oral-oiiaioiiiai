@@ -2,14 +2,14 @@
  * OIIAIOIIIAI Leaderboard Worker
  *
  * KV 结构:
- *   scores:<id>              → ScoreEntry JSON    (单条记录)
- *   top:global               → ScoreEntry[] JSON  (前 100 名缓存)
- *   stats:global              → GlobalStats JSON   (全局统计)
+ *   scores:<packId>:<id>     → ScoreEntry JSON    (单条记录)
+ *   top:<packId>             → ScoreEntry[] JSON  (前 100 名缓存)
+ *   stats:<packId>           → GlobalStats JSON   (分包统计)
  *
  * API:
- *   POST /api/scores          提交分数
- *   GET  /api/leaderboard     获取排行榜 (top N)
- *   GET  /api/stats           获取全局统计
+ *   POST /api/scores          提交分数 (body 含 packId)
+ *   GET  /api/leaderboard     获取排行榜 (?packId=xxx)
+ *   GET  /api/stats           获取全局统计 (?packId=xxx)
  */
 
 export interface Env {
@@ -20,6 +20,7 @@ export interface Env {
 
 interface ScoreEntry {
   id: string;
+  packId: string;
   name: string;
   score: number;
   maxCombo: number;
@@ -41,6 +42,7 @@ interface GlobalStats {
 
 interface SubmitPayload {
   name: string;
+  packId: string;
   score: number;
   maxCombo: number;
   stage: number;
@@ -99,6 +101,12 @@ function validatePayload(body: unknown): { ok: true; data: SubmitPayload } | { o
 
   const b = body as Record<string, unknown>;
 
+  // packId: 默认 'oiia'，限制 a-z0-9-_ 1-32 字符
+  const rawPackId = typeof b.packId === 'string' ? b.packId.trim() : 'oiia';
+  if (!/^[a-z0-9_-]{1,32}$/.test(rawPackId)) {
+    return { ok: false, error: '资源包 ID 无效' };
+  }
+
   if (typeof b.name !== 'string' || b.name.trim().length === 0) {
     return { ok: false, error: '昵称不能为空' };
   }
@@ -122,6 +130,7 @@ function validatePayload(body: unknown): { ok: true; data: SubmitPayload } | { o
     ok: true,
     data: {
       name: b.name.trim(),
+      packId: rawPackId,
       score: Math.floor(b.score as number),
       maxCombo: Math.max(0, Math.floor((b.maxCombo as number) || 0)),
       stage: Math.max(1, Math.floor((b.stage as number) || 1)),
@@ -146,19 +155,19 @@ async function checkRateLimit(kv: KVNamespace, ip: string): Promise<boolean> {
 
 /* ---------- 排行榜缓存 ---------- */
 
-async function getTopScores(kv: KVNamespace): Promise<ScoreEntry[]> {
-  const cached = await kv.get('top:global', 'json');
+async function getTopScores(kv: KVNamespace, packId: string): Promise<ScoreEntry[]> {
+  const cached = await kv.get(`top:${packId}`, 'json');
   if (cached) return cached as ScoreEntry[];
   return [];
 }
 
-async function rebuildTop(kv: KVNamespace): Promise<ScoreEntry[]> {
-  // 列出所有 scores: 前缀的 key
+async function rebuildTop(kv: KVNamespace, packId: string): Promise<ScoreEntry[]> {
+  // 列出该 pack 的所有 scores 前缀的 key
   const entries: ScoreEntry[] = [];
   let cursor: string | undefined;
 
   do {
-    const list = await kv.list({ prefix: 'scores:', cursor, limit: 1000 });
+    const list = await kv.list({ prefix: `scores:${packId}:`, cursor, limit: 1000 });
     const promises = list.keys.map((k) => kv.get(k.name, 'json'));
     const results = await Promise.all(promises);
     for (const r of results) {
@@ -171,24 +180,24 @@ async function rebuildTop(kv: KVNamespace): Promise<ScoreEntry[]> {
   const top = entries.slice(0, TOP_N);
 
   // 缓存 5 分钟
-  await kv.put('top:global', JSON.stringify(top), { expirationTtl: 300 });
+  await kv.put(`top:${packId}`, JSON.stringify(top), { expirationTtl: 300 });
   return top;
 }
 
-async function getStats(kv: KVNamespace): Promise<GlobalStats> {
-  const stats = await kv.get('stats:global', 'json') as GlobalStats | null;
+async function getStats(kv: KVNamespace, packId: string): Promise<GlobalStats> {
+  const stats = await kv.get(`stats:${packId}`, 'json') as GlobalStats | null;
   return stats ?? { totalPlays: 0, totalOiiia: 0, highestScore: 0, updatedAt: Date.now() };
 }
 
-async function updateStats(kv: KVNamespace, entry: ScoreEntry): Promise<GlobalStats> {
-  const stats = await getStats(kv);
+async function updateStats(kv: KVNamespace, packId: string, entry: ScoreEntry): Promise<GlobalStats> {
+  const stats = await getStats(kv, packId);
   stats.totalPlays += 1;
   stats.totalOiiia += entry.correctVowels;
   if (entry.score > stats.highestScore) {
     stats.highestScore = entry.score;
   }
   stats.updatedAt = Date.now();
-  await kv.put('stats:global', JSON.stringify(stats));
+  await kv.put(`stats:${packId}`, JSON.stringify(stats));
   return stats;
 }
 
@@ -222,17 +231,19 @@ async function handleSubmit(request: Request, env: Env): Promise<Response> {
     createdAt: Date.now(),
   };
 
+  const packId = entry.packId;
+
   // 写入 KV
-  await env.LEADERBOARD.put(`scores:${entry.id}`, JSON.stringify(entry));
+  await env.LEADERBOARD.put(`scores:${packId}:${entry.id}`, JSON.stringify(entry));
 
   // 更新统计
-  const stats = await updateStats(env.LEADERBOARD, entry);
+  const stats = await updateStats(env.LEADERBOARD, packId, entry);
 
   // 清除排行榜缓存（下次读取时重建）
-  await env.LEADERBOARD.delete('top:global');
+  await env.LEADERBOARD.delete(`top:${packId}`);
 
   // 查找排名
-  const top = await rebuildTop(env.LEADERBOARD);
+  const top = await rebuildTop(env.LEADERBOARD, packId);
   const rank = top.findIndex((e) => e.id === entry.id) + 1;
 
   return json(
@@ -246,18 +257,21 @@ async function handleLeaderboard(request: Request, env: Env): Promise<Response> 
   const origin = request.headers.get('Origin');
   const url = new URL(request.url);
   const limit = Math.min(TOP_N, Math.max(1, parseInt(url.searchParams.get('limit') ?? '20', 10)));
+  const packId = url.searchParams.get('packId') ?? 'oiia';
 
-  const top = await getTopScores(env.LEADERBOARD);
+  const top = await getTopScores(env.LEADERBOARD, packId);
 
   // 缓存未命中则重建
-  const scores = top.length > 0 ? top : await rebuildTop(env.LEADERBOARD);
+  const scores = top.length > 0 ? top : await rebuildTop(env.LEADERBOARD, packId);
 
   return json({ scores: scores.slice(0, limit) }, 200, origin);
 }
 
 async function handleStats(request: Request, env: Env): Promise<Response> {
   const origin = request.headers.get('Origin');
-  const stats = await getStats(env.LEADERBOARD);
+  const url = new URL(request.url);
+  const packId = url.searchParams.get('packId') ?? 'oiia';
+  const stats = await getStats(env.LEADERBOARD, packId);
   return json(stats, 200, origin);
 }
 

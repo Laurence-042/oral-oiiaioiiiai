@@ -94,9 +94,9 @@
 
               <!-- 全局统计 -->
               <div v-if="leaderboard.globalStats.value" class="lb-card-stats">
-                <span>{{ leaderboard.globalStats.value.totalPlays }} 人参与</span>
+                <span>{{ leaderboard.globalStats.value.totalPlays }} 人{{ loadedPack?.textConfig?.leaderboardText?.participateVerb ?? '参与' }}</span>
                 <span>·</span>
-                <span>累计 {{ leaderboard.globalStats.value.totalOiiia.toLocaleString() }} 次</span>
+                <span>累计{{ loadedPack?.textConfig?.leaderboardText?.unit ?? 'OIIIA' }} {{ leaderboard.globalStats.value.totalOiiia.toLocaleString() }} 次</span>
               </div>
 
               <div v-if="leaderboard.loading.value" class="lb-card-loading">
@@ -418,7 +418,6 @@ const bgm = useDynamicBGM();
 // ==================== 分享系统 ====================
 const shareCapture = useShareCapture();
 const hlMoments = useHighlights();
-const leaderboard = useLeaderboard();
 const shareImageUrl = ref<string | null>(null);
 /** 高光卡片图片 URL 列表（与 hlMoments.highlights 一一对应） */
 const highlightImageUrls = ref<string[]>([]);
@@ -470,6 +469,8 @@ const {
   loadedPack,
   sequence: packSequence
 } = resPack;
+
+const leaderboard = useLeaderboard(currentPackId);
 
 // ==================== 序列滑动窗口 ====================
 const SEQ_PAST_COUNT = 2;    // 左侧已发过的音数
@@ -1120,7 +1121,12 @@ const switchDetector = (mode: DetectorMode) => {
 async function onPackChange(e: Event) {
   const id = (e.target as HTMLSelectElement).value;
   if (id === currentPackId.value) return;
-  try { await resPack.loadPack(id); } catch { /* handled via resPack.error */ }
+  try {
+    await resPack.loadPack(id);
+    // 切换资源包后重新拉取对应排行榜
+    leaderboard.fetchLeaderboard(15);
+    leaderboard.fetchStats();
+  } catch { /* handled via resPack.error */ }
 }
 
 const handleStart = async () => {

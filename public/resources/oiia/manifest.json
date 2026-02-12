@@ -80,7 +80,10 @@
       { "title": "无限循环模式", "subtitle": "对着猫叫，成为传说！" },
       { "title": "完美执行", "subtitle": "你的 OIIIA 精准得可怕" },
       { "title": "人形猫叫机器", "subtitle": "效率之王，精准之神" }
-    ]
+    ],
+    "leaderboardText": {
+      "unit": "猫叫"
+    }
   },
   "syllables": [
     "001_U.wav",

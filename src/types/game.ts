@@ -306,6 +306,14 @@ export interface PackStageConfig {
   copywriting?: CopywritingVariant[];
 }
 
+/** 排行榜文案配置 */
+export interface LeaderboardTextConfig {
+  /** 统计单位 (如 "猫叫"、"OIIIA") */
+  unit: string;
+  /** "xx 人参与" 的动词 (默认 "参与") */
+  participateVerb?: string;
+}
+
 /** 资源包文案配置 (全部可选，有默认 fallback) */
 export interface PackTextConfig {
   /** 阶段定义 (数量、名称、分数阈值、文案) */
@@ -314,6 +322,8 @@ export interface PackTextConfig {
   highlightLabels?: Partial<HighlightLabelTemplates>;
   /** 高连击/高循环特殊文案 */
   specialCopywriting?: CopywritingVariant[];
+  /** 排行榜文案配置 */
+  leaderboardText?: LeaderboardTextConfig;
 }
 
 // ==================== 事件回调类型 ====================
@@ -354,6 +364,8 @@ export interface LeaderboardEntry {
   totalVowels: number;
   correctVowels: number;
   createdAt: number;
+  /** 资源包 ID */
+  packId: string;
 }
 
 /** 全局统计 */
@@ -375,6 +387,8 @@ export interface ScoreSubmitPayload {
   duration: number;
   totalVowels: number;
   correctVowels: number;
+  /** 资源包 ID */
+  packId: string;
 }
 
 /** 提交分数响应 */
