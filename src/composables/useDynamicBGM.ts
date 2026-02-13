@@ -15,6 +15,21 @@ interface ActiveTrack {
   effects: ToneNS.ToneAudioNode[];
 }
 
+export interface UseDynamicBGMOptions {
+  /**
+   * 共享 AudioContext 提供者。
+   * 传入后 Tone.js 会复用该 AudioContext，而非自行创建新的，
+   * 从而与 syllable 播放等其他音频系统共享同一音频线程。
+   */
+  getAudioContext?: () => AudioContext;
+  /**
+   * 共享输出节点。传入后 BGM masterChannel 连接到此节点，
+   * 与 SFX 等共享同一条主音量链路，实现统一音量控制。
+   * 未提供时回退到 Tone.js 默认 destination。
+   */
+  getDestination?: () => AudioNode;
+}
+
 export interface UseDynamicBGMReturn {
   /** 是否正在播放 */
   isPlaying: Ref<boolean>;
@@ -36,7 +51,7 @@ export interface UseDynamicBGMReturn {
 
 // ==================== Composable ====================
 
-export function useDynamicBGM(): UseDynamicBGMReturn {
+export function useDynamicBGM(options?: UseDynamicBGMOptions): UseDynamicBGMReturn {
   const isPlaying = ref(false);
   const currentBPM = ref(120);
 
@@ -99,7 +114,13 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
   function buildAllTracks(t: typeof ToneNS, config: BGMConfig) {
     t.getTransport().bpm.value = config.baseBPM;
 
-    masterChannel = new t.Channel(config.masterVolume).toDestination();
+    masterChannel = new t.Channel(config.masterVolume);
+    // 连接到共享主增益节点（与 SFX 汇合），若未提供则回退到 Tone 默认 destination
+    if (options?.getDestination) {
+      masterChannel.connect(options.getDestination());
+    } else {
+      masterChannel.toDestination();
+    }
 
     for (const trackCfg of config.tracks) {
       activeTracks.push(buildTrack(t, trackCfg));
@@ -222,6 +243,10 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
     try {
       if (!T) {
         T = await import('tone');
+        // 将 Tone.js 绑定到共享 AudioContext，与 syllable 播放等共用同一音频线程
+        if (options?.getAudioContext) {
+          T.setContext(options.getAudioContext());
+        }
       }
       if (!starting) return;
 

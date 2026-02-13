@@ -134,11 +134,47 @@ export function useResourcePack() {
 
   // 共享 AudioContext (懒创建)
   let audioCtx: AudioContext | null = null;
+
+  // ── 音量路由 ──
+  // source → sfxGain → masterGain → destination
+  // Tone.js (BGM) 也连接到 masterGain，实现统一输出
+  let masterGain: GainNode | null = null;
+  let sfxGain: GainNode | null = null;
+
   function getAudioContext(): AudioContext {
     if (!audioCtx || audioCtx.state === 'closed') {
       audioCtx = new AudioContext();
+      // 创建音量路由节点
+      masterGain = audioCtx.createGain();
+      masterGain.connect(audioCtx.destination);
+      sfxGain = audioCtx.createGain();
+      sfxGain.connect(masterGain);
     }
     return audioCtx;
+  }
+
+  /** 获取主增益节点（BGM/其他音频系统应连接到此节点而非 destination） */
+  function getMasterGain(): GainNode {
+    getAudioContext(); // 确保已创建
+    return masterGain!;
+  }
+
+  /**
+   * 设置 SFX（音节）音量
+   * @param volume 线性增益值 0-1（0 = 静音，1 = 原始音量）
+   */
+  function setSfxVolume(volume: number) {
+    getAudioContext();
+    if (sfxGain) sfxGain.gain.value = volume;
+  }
+
+  /**
+   * 设置主音量
+   * @param volume 线性增益值 0-1
+   */
+  function setMasterVolume(volume: number) {
+    getAudioContext();
+    if (masterGain) masterGain.gain.value = volume;
   }
 
   /** 获取所有可用资源包列表 */
@@ -276,7 +312,7 @@ export function useResourcePack() {
     const source = ctx.createBufferSource();
     source.buffer = syl.buffer;
     source.playbackRate.value = playbackRate;
-    source.connect(ctx.destination);
+    source.connect(sfxGain!);  // 走 sfxGain → masterGain → destination
     source.start(0);
 
     return {
@@ -290,6 +326,8 @@ export function useResourcePack() {
   /** 清理资源 */
   function dispose() {
     loadedPack.value = null;
+    sfxGain = null;
+    masterGain = null;
     if (audioCtx && audioCtx.state !== 'closed') {
       audioCtx.close();
       audioCtx = null;
@@ -313,6 +351,9 @@ export function useResourcePack() {
     loadPack,
     playSyllable,
     getAudioContext,
+    getMasterGain,
+    setSfxVolume,
+    setMasterVolume,
     dispose
   };
 }

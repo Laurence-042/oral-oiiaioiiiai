@@ -429,7 +429,10 @@ const confPct = computed(() => Math.round((currentResult.value?.confidence ?? 0)
 const volPct = computed(() => Math.max(0, Math.min(100, (currentResult.value?.volume ?? -100) + 100)));
 
 // ==================== 动态 BGM ====================
-const bgm = useDynamicBGM();
+const bgm = useDynamicBGM({
+  getAudioContext: () => resPack.getAudioContext(),
+  getDestination: () => resPack.getMasterGain(),
+});
 
 // ==================== 分享系统 ====================
 const shareCapture = useShareCapture();
@@ -960,9 +963,11 @@ let lastPlayerVowelTime = 0;
 let playerIntervals: number[] = [];
 const INTERVAL_WINDOW = 6;
 
-/** 播放指定序列位置的 syllable 音频 (带阶段变调) */
+/** 播放指定序列位置的 syllable 音频 (带阶段变调 + 音量) */
 function playExpectedSyllable(seqIndex: number) {
-  resPack.playSyllable(seqIndex, stageConfig.value.audio.sfxPitch);
+  const audioCfg = stageConfig.value.audio;
+  resPack.setSfxVolume(audioCfg.sfxVolume);
+  resPack.playSyllable(seqIndex, audioCfg.sfxPitch);
 }
 
 // 监听 sequenceIndex 变化 → 播放对应音节 + 计算速度比
@@ -1146,6 +1151,8 @@ game.onComboBreak((_combo, reason) => {
 // ==================== 高光时刻 ====================
 game.onStageChange((_from, to) => {
   bgm.setStage(to);
+  // 同步更新 SFX 音量（阶段越高 BGM 越强，适当降低 SFX 避免裂剥）
+  resPack.setSfxVolume(stageConfig.value.audio.sfxVolume);
   hlMoments.onStageUp(_from, to, stats.value.score, stats.value.combo);
 });
 
@@ -1188,9 +1195,9 @@ const handleStart = async () => {
     if (!loadedPack.value) await resPack.loadPack(currentPackId.value);
     if (state.value === 'interrupted') resetGame();
 
-    // 在用户手势（click）上下文中预热 Tone.js AudioContext
-    // 避免后续 watch(state) 中 bgm.start() 不在手势上下文导致 AudioContext 被浏览器阻塞
-    await preWarmBGM();
+    // 在用户手势（click）上下文中预热共享 AudioContext
+    // BGM 和 syllable 共用同一 AudioContext，一次 resume 即可
+    await preWarmAudio();
 
     // 进入 ready 状态 → 启动检测器 → 等待玩家发出首音
     state.value = 'ready';
@@ -1201,13 +1208,16 @@ const handleStart = async () => {
   }
 };
 
-/** 在用户手势上下文中预热 Tone.js，确保 AudioContext 不被自动播放策略阻塞 */
-async function preWarmBGM() {
+/**
+ * 在用户手势上下文中预热共享 AudioContext。
+ * BGM (Tone.js) 和 syllable 播放共用同一个 AudioContext，
+ * 只需 resume 一次即可解除浏览器自动播放策略限制。
+ */
+async function preWarmAudio() {
   try {
-    const { start: toneStart, getContext } = await import('tone');
-    await toneStart();
-    if (getContext().state === 'suspended') {
-      await getContext().rawContext.resume();
+    const ctx = resPack.getAudioContext();
+    if (ctx.state === 'suspended') {
+      await ctx.resume();
     }
   } catch {
     // 非关键路径，静默忽略

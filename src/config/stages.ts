@@ -93,7 +93,8 @@ export const STAGE_VISUAL_CONFIGS: StageVisualConfig[] = [
       }
     },
     audio: {
-      sfxPitch: 1.0
+      sfxPitch: 1.0,
+      sfxVolume: 1.0
     },
     screenEffects: {
       shake: 0,
@@ -122,7 +123,8 @@ export const STAGE_VISUAL_CONFIGS: StageVisualConfig[] = [
       }
     },
     audio: {
-      sfxPitch: 1.05
+      sfxPitch: 1.05,
+      sfxVolume: 1.0
     },
     screenEffects: {
       shake: 0,
@@ -151,7 +153,8 @@ export const STAGE_VISUAL_CONFIGS: StageVisualConfig[] = [
       }
     },
     audio: {
-      sfxPitch: 1.1
+      sfxPitch: 1.1,
+      sfxVolume: 0.9
     },
     screenEffects: {
       shake: 0.02,            // 轻微抖动
@@ -180,7 +183,8 @@ export const STAGE_VISUAL_CONFIGS: StageVisualConfig[] = [
       }
     },
     audio: {
-      sfxPitch: 1.2
+      sfxPitch: 1.2,
+      sfxVolume: 0.8
     },
     screenEffects: {
       shake: 0.04,
@@ -211,7 +215,8 @@ export const STAGE_VISUAL_CONFIGS: StageVisualConfig[] = [
     },
     audio: {
       bgm: 'stage5-bgm.mp3',
-      sfxPitch: 1.3
+      sfxPitch: 1.3,
+      sfxVolume: 0.7
     },
     screenEffects: {
       shake: 0.06,

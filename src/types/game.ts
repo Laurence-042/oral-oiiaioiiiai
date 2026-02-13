@@ -274,6 +274,8 @@ export interface StageVisualConfig {
     bgm?: string;
     /** 音效变调 */
     sfxPitch: number;
+    /** SFX（音节）音量 0-1，默认 1.0 */
+    sfxVolume: number;
   };
   screenEffects: ScreenEffectsConfig;
 }
