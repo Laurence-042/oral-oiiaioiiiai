@@ -228,6 +228,13 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
       await T.start();
       if (!starting) return;
 
+      // 确保 AudioContext 处于 running 状态
+      // 某些浏览器在非用户手势上下文中 Tone.start() 不会抛错但 AudioContext 仍 suspended
+      if (T.getContext().state === 'suspended') {
+        console.warn('[BGM] AudioContext still suspended after Tone.start(), attempting resume...');
+        await T.getContext().rawContext.resume();
+      }
+
       if (!built && pendingConfig) {
         buildAllTracks(T, pendingConfig);
       }
@@ -243,13 +250,18 @@ export function useDynamicBGM(): UseDynamicBGMReturn {
 
       T.getTransport().start();
       isPlaying.value = true;
+    } catch (err) {
+      console.error('[BGM] start() failed:', err);
     } finally {
       starting = false;
     }
   }
 
   function stop() {
-    starting = false;
+    // 注意：不再无条件 starting=false
+    // 如果 start() 正在 await 中，stop() 设置 starting=false 会导致
+    // start() 在 await 返回后静默退出，BGM 永远无法播放。
+    // 改为仅在 start 未进行中时清理。
     stopUpdateLoop();
     targetVolumes.clear();
 

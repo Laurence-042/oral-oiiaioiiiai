@@ -1187,6 +1187,11 @@ const handleStart = async () => {
   try {
     if (!loadedPack.value) await resPack.loadPack(currentPackId.value);
     if (state.value === 'interrupted') resetGame();
+
+    // 在用户手势（click）上下文中预热 Tone.js AudioContext
+    // 避免后续 watch(state) 中 bgm.start() 不在手势上下文导致 AudioContext 被浏览器阻塞
+    await preWarmBGM();
+
     // 进入 ready 状态 → 启动检测器 → 等待玩家发出首音
     state.value = 'ready';
     lastInterruptReason.value = null;
@@ -1195,6 +1200,19 @@ const handleStart = async () => {
     console.error('启动失败', err);
   }
 };
+
+/** 在用户手势上下文中预热 Tone.js，确保 AudioContext 不被自动播放策略阻塞 */
+async function preWarmBGM() {
+  try {
+    const { start: toneStart, getContext } = await import('tone');
+    await toneStart();
+    if (getContext().state === 'suspended') {
+      await getContext().rawContext.resume();
+    }
+  } catch {
+    // 非关键路径，静默忽略
+  }
+}
 
 // ==================== 暂停 & 倒计时 ====================
 const countdownValue = ref(0);
