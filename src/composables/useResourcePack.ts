@@ -187,39 +187,42 @@ export function useResourcePack() {
         loadProgress.value = Math.round((loaded / totalAssets) * 100);
       };
 
-      // 2. 加载音节
+      // 2. 并行加载音节
       const ctx = getAudioContext();
-      const syllables: SyllableData[] = [];
-
-      for (const filename of manifest.syllables) {
+      const syllablePromises = manifest.syllables.map(async (filename) => {
         const url = `${basePath}/syllables/${filename}`;
         const aRes = await fetch(url);
         const arrayBuf = await aRes.arrayBuffer();
         const buffer = await ctx.decodeAudioData(arrayBuf);
         const parsed = parseSyllableFilename(filename);
-        syllables.push({
+        tick();
+        return {
           index: parsed.index,
           vowel: parsed.vowel,
           filename,
           buffer,
           duration: buffer.duration
-        });
+        } as SyllableData;
+      });
+
+      // 3. 并行加载帧图片
+      const framePromises = manifest.chromaFrames.map(async (filename) => {
+        const url = `${basePath}/chroma_frames/${filename}`;
+        const img = await loadImage(url);
         tick();
-      }
+        return img;
+      });
+
+      // 所有资源并行加载
+      const [syllables, allFrames] = await Promise.all([
+        Promise.all(syllablePromises),
+        Promise.all(framePromises)
+      ]);
 
       // 按 index 排序
       syllables.sort((a, b) => a.index - b.index);
 
       const totalSyllableDuration = syllables.reduce((sum, s) => sum + s.duration, 0);
-
-      // 3. 加载帧图片
-      const allFrames: HTMLImageElement[] = [];
-      for (const filename of manifest.chromaFrames) {
-        const url = `${basePath}/chroma_frames/${filename}`;
-        const img = await loadImage(url);
-        allFrames.push(img);
-        tick();
-      }
 
       const idleFrame = allFrames[0];
       const animationFrames = allFrames.slice(1);

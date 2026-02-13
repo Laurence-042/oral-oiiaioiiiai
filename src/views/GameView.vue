@@ -1,5 +1,5 @@
 <template>
-  <div class="game-view" :class="{ mobile: isMobile }">
+  <div class="game-view" :class="{ mobile: isMobile, portrait: isPortrait }">
     <!-- ==================== 加载界面 ==================== -->
     <div v-if="packLoading" class="loading-overlay">
       <div class="loading-card">
@@ -366,15 +366,17 @@ type DetectorMode = 'ml' | 'mfcc';
 
 // ==================== 响应式布局 ====================
 const isMobile = ref(false);
-function checkMobile() {
+const isPortrait = ref(false);
+function checkLayout() {
   isMobile.value = window.innerWidth < 768;
+  isPortrait.value = window.innerHeight > window.innerWidth;
 }
 onMounted(() => {
-  checkMobile();
-  window.addEventListener('resize', checkMobile);
+  checkLayout();
+  window.addEventListener('resize', checkLayout);
 });
 onUnmounted(() => {
-  window.removeEventListener('resize', checkMobile);
+  window.removeEventListener('resize', checkLayout);
 });
 
 // ==================== 检测器 ====================
@@ -544,6 +546,8 @@ function triggerShake() {
   if (intensity <= 0 || state.value !== 'playing') return;
   // 叠加能量，但不超过 1
   shakeEnergy = Math.min(1, shakeEnergy + 0.6);
+  // 确保 RAF 循环在运行
+  if (!shakeRAF) startShake();
 }
 
 const mainStyle = computed(() => {
@@ -574,14 +578,16 @@ function startShake() {
         y: (Math.random() - 0.5) * 2 * amp
       };
       shakeEnergy *= SHAKE_DECAY;
+      shakeRAF = requestAnimationFrame(tick);
     } else {
       shakeEnergy = 0;
       if (shakeOffset.value.x !== 0 || shakeOffset.value.y !== 0) {
         shakeOffset.value = { x: 0, y: 0 };
       }
+      shakeRAF = 0; // 能量耗尽时自动停止 RAF
     }
-    shakeRAF = requestAnimationFrame(tick);
   }
+  if (shakeRAF) return; // 已在运行
   shakeRAF = requestAnimationFrame(tick);
 }
 
@@ -668,6 +674,8 @@ function triggerParticles() {
   const cfg = stageConfig.value.background.particles;
   if (!cfg.enabled || state.value !== 'playing') return;
   particleEnergy = Math.min(1, particleEnergy + 0.5);
+  // 确保粒子 RAF 循环在运行
+  if (!particleRAF) startParticles();
 }
 
 function startParticles() {
@@ -714,7 +722,8 @@ function startParticles() {
     if (!cfg.enabled || state.value !== 'playing') {
       particles = [];
       particleEnergy = 0;
-      particleRAF = requestAnimationFrame(tick);
+      // 非 playing 状态自动停止 RAF，避免空转
+      particleRAF = 0;
       return;
     }
 
@@ -752,6 +761,12 @@ function startParticles() {
       ctx.fill();
     }
     ctx.globalAlpha = 1;
+
+    // 粒子能量耗尽且无残留粒子时自动停止 RAF
+    if (particleEnergy <= 0 && particles.length === 0 && state.value !== 'playing') {
+      particleRAF = 0;
+      return;
+    }
 
     particleRAF = requestAnimationFrame(tick);
   }
@@ -1220,7 +1235,7 @@ setupReadyTrigger();
 onMounted(async () => {
   await resPack.fetchAvailablePacks();
   try { await resPack.loadPack(currentPackId.value); } catch { /* handled */ }
-  startParticles(); // 初始化 canvas（idle 时不渲染粒子）
+  // 粒子系统在 playing 状态时才启动，idle 时不浪费 RAF
 
   // 初始化 BGM
   const pack = loadedPack.value;
@@ -1995,5 +2010,117 @@ onUnmounted(() => {
 @media (min-width: 769px) and (orientation: landscape) {
   .sprite-container { max-width: 420px; max-height: 420px; }
   .score-strip { gap: 40px; }
+}
+
+/* ==================== 竖屏高分辨率适配 ==================== */
+/* 竖屏平板 / 大屏手机：放大各组件填充空间 */
+@media (orientation: portrait) {
+  .game-view.portrait .sprite-container {
+    max-width: min(80vw, 480px);
+    max-height: min(45vh, 480px);
+  }
+  .game-view.portrait .sprite-area {
+    padding: 8px 16px;
+  }
+  .game-view.portrait .score-strip {
+    gap: min(6vw, 36px);
+    padding: 12px 16px;
+  }
+  .game-view.portrait .score-val {
+    font-size: min(5vw, 22px);
+  }
+  .game-view.portrait .score-val.highlight {
+    font-size: min(7.5vw, 32px);
+  }
+  .game-view.portrait .score-lbl {
+    font-size: min(3vw, 13px);
+  }
+  .game-view.portrait .seq-dot {
+    width: min(10vw, 44px);
+    height: min(10vw, 44px);
+    font-size: min(4vw, 17px);
+    border-radius: min(2vw, 10px);
+  }
+  .game-view.portrait .detect-vowel {
+    width: min(15vw, 68px);
+    height: min(15vw, 68px);
+    font-size: min(8vw, 34px);
+    border-radius: min(3.5vw, 16px);
+  }
+  .game-view.portrait .detect-bars {
+    max-width: 55vw;
+  }
+  .game-view.portrait .mini-bar {
+    font-size: min(3vw, 13px);
+  }
+  .game-view.portrait .mini-track {
+    height: min(1.5vw, 8px);
+  }
+  .game-view.portrait .game-footer {
+    padding: 12px 16px max(20px, env(safe-area-inset-bottom, 20px));
+  }
+  .game-view.portrait .btn {
+    padding: 12px 24px;
+    font-size: min(4.2vw, 16px);
+    border-radius: 12px;
+  }
+  .game-view.portrait .btn.large {
+    padding: 16px 32px;
+    font-size: min(4.5vw, 18px);
+    border-radius: 16px;
+  }
+  .game-view.portrait .game-title {
+    font-size: min(5.5vw, 24px);
+  }
+  .game-view.portrait .game-header {
+    padding: 12px 16px;
+  }
+  .game-view.portrait .sequence-area {
+    padding: 14px 16px;
+  }
+}
+
+/* 竖屏平板 (>= 768px 宽)：额外放大精灵和分数 */
+@media (orientation: portrait) and (min-width: 768px) {
+  .game-view.portrait .sprite-container {
+    max-width: min(65vw, 560px);
+    max-height: min(48vh, 560px);
+  }
+  .game-view.portrait .score-val {
+    font-size: 24px;
+  }
+  .game-view.portrait .score-val.highlight {
+    font-size: 36px;
+  }
+  .game-view.portrait .score-lbl {
+    font-size: 14px;
+  }
+  .game-view.portrait .seq-dot {
+    width: 48px; height: 48px; font-size: 18px; border-radius: 10px;
+  }
+  .game-view.portrait .detect-vowel {
+    width: 72px; height: 72px; font-size: 36px;
+  }
+  .game-view.portrait .btn {
+    padding: 14px 28px; font-size: 17px;
+  }
+  .game-view.portrait .btn.large {
+    padding: 18px 36px; font-size: 20px;
+  }
+  .game-view.portrait .game-title {
+    font-size: 26px; letter-spacing: 4px;
+  }
+  /* 结算過罩 */
+  .game-view.portrait .result-icon { font-size: 56px; }
+  .game-view.portrait .result-title { font-size: 28px; }
+  .game-view.portrait .result-subtitle { font-size: 15px; }
+  .game-view.portrait .result-value { font-size: 22px; }
+  .game-view.portrait .result-stat.main .result-value { font-size: 34px; }
+  .game-view.portrait .result-label { font-size: 12px; }
+  /* 预备過罩 */
+  .game-view.portrait .ready-icon { font-size: 80px; }
+  .game-view.portrait .ready-title { font-size: 36px; }
+  .game-view.portrait .ready-hint { font-size: 20px; }
+  .game-view.portrait .ready-hint strong { font-size: 30px; }
 }
 </style>

@@ -1,5 +1,5 @@
 import { ref, shallowRef, onUnmounted } from 'vue';
-import * as tf from '@tensorflow/tfjs';
+import type * as TF from '@tensorflow/tfjs';
 import type {
   Vowel,
   VowelDetectorConfig,
@@ -12,6 +12,16 @@ import type {
   VowelDetectorDebugData
 } from '@/types/game';
 import { DEFAULT_VOWEL_DETECTOR_CONFIG, DEFAULT_VOWEL_FORMANTS } from '@/config/vowels';
+
+// 懒加载 TensorFlow.js，避免 MFCC 模式下加载整个 TF.js 运行时
+let _tf: typeof TF | null = null;
+async function ensureTF(): Promise<typeof TF> {
+  if (!_tf) {
+    _tf = await import('@tensorflow/tfjs');
+    console.log('✅ TensorFlow.js 已加载');
+  }
+  return _tf;
+}
 
 const VOWEL_CLASSES = ['A', 'E', 'I', 'O', 'U', 'silence'] as const;
 const INPUT_SAMPLES = 3360; // 210ms @ 16kHz
@@ -68,7 +78,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
   let audioContext: AudioContext | null = null;
   let mediaStream: MediaStream | null = null;
   let workletNode: AudioWorkletNode | null = null;
-  let model: tf.GraphModel | null = null;
+  let model: TF.GraphModel | null = null;
   let pendingAudioBuffer: Float32Array | null = null; // 最新一帧来自 AudioWorklet
   let animationFrameId: number | null = null;
   let actualSampleRate = 44100;
@@ -115,8 +125,9 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
   // ==================== 模型初始化 ====================
   async function loadModel(): Promise<void> {
     try {
+      const tf = await ensureTF();
       const modelPath = config?.modelPath ?? `${import.meta.env.BASE_URL}models/vowel/model.json`;
-      model = (await tf.loadGraphModel(modelPath)) as tf.GraphModel;
+      model = (await tf.loadGraphModel(modelPath)) as TF.GraphModel;
       console.log('✅ 元音识别模型已加载');
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
@@ -205,10 +216,13 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
         // 重置静音计时
         silenceStartTime = null;
 
-        // 转换为 Tensor 并进行推理
-        const input = tf.tensor2d(audioData, [1, INPUT_SAMPLES]);
-        const predictions = model!.predict(input) as tf.Tensor;
-        const probabilities = await predictions.data();
+        // 转换为 Tensor 并进行推理（tf.tidy 自动清理中间张量）
+        const tf = _tf!; // loadModel 中已确保加载
+        const probabilities = tf.tidy(() => {
+          const input = tf.tensor2d(audioData, [1, INPUT_SAMPLES]);
+          const predictions = model!.predict(input) as TF.Tensor;
+          return Array.from(predictions.dataSync());
+        });
         
         // 更新最新概率分布（用于 UI 显示）
         latestProbabilities.value = Array.from(probabilities);
@@ -287,10 +301,6 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
         if (status === 'detected' && vowel !== null) {
           handleVowelDetected(vowel, result);
         }
-
-        // 清理
-        input.dispose();
-        predictions.dispose();
       }
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
