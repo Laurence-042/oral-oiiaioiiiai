@@ -65,6 +65,10 @@ export function useVowelDetector(config?: VowelDetectorConfig): VowelDetectorHoo
   let animationFrameId: number | null = null;
   let lastAnalysisTime = 0;
   
+  // 预分配复用缓冲区 — 避免每帧 GC
+  let frequencyBuffer: Float32Array<ArrayBuffer> | null = null;
+  let timeBuffer: Float32Array<ArrayBuffer> | null = null;
+  
   // 元音检测状态
   let lastConfirmedVowel: Vowel | null = null;  // 上一次确认的元音
   let hadGapSinceLastEmit = true;                // 上次触发后是否经过了静音间隔
@@ -134,6 +138,10 @@ export function useVowelDetector(config?: VowelDetectorConfig): VowelDetectorHoo
       analyserNode.fftSize = cfg.fftSize;
       // 降低平滑系数，让频谱响应更灵敏（0 = 无平滑，1 = 最大平滑）
       analyserNode.smoothingTimeConstant = 0.1;
+
+      // 预分配缓冲区（复用，避免每帧 new Float32Array）
+      frequencyBuffer = new Float32Array(analyserNode.frequencyBinCount);
+      timeBuffer = new Float32Array(analyserNode.fftSize);
 
       // 连接音频源到分析节点
       const source = audioContext.createMediaStreamSource(mediaStream);
@@ -292,7 +300,7 @@ export function useVowelDetector(config?: VowelDetectorConfig): VowelDetectorHoo
 
   // ==================== 分析循环 ====================
   function analyzeFrame(): void {
-    if (!analyserNode || !isListening.value) return;
+    if (!analyserNode || !isListening.value || !frequencyBuffer || !timeBuffer) return;
 
     const now = performance.now();
     
@@ -304,15 +312,13 @@ export function useVowelDetector(config?: VowelDetectorConfig): VowelDetectorHoo
     lastAnalysisTime = now;
 
     try {
-      // 获取频谱数据
-      const frequencyData = new Float32Array(analyserNode.frequencyBinCount);
-      analyserNode.getFloatFrequencyData(frequencyData);
-      
-      // 获取时域数据（用于调试）
-      const timeData = new Float32Array(analyserNode.fftSize);
-      analyserNode.getFloatTimeDomainData(timeData);
+      // 复用预分配缓冲区（零 GC）
+      analyserNode.getFloatFrequencyData(frequencyBuffer!);
+      analyserNode.getFloatTimeDomainData(timeBuffer!);
 
-      // 更新调试数据
+      // 仅引用既有缓冲区，避免每帧触发 Vue 响应式更新
+      const frequencyData = frequencyBuffer as Float32Array;
+      const timeData = timeBuffer as Float32Array;
       debugData.value = { frequencyData, timeData };
 
       // 计算音量 (使用时域 RMS + 频域峰值的组合)
@@ -445,6 +451,9 @@ export function useVowelDetector(config?: VowelDetectorConfig): VowelDetectorHoo
       audioContext = null;
       analyserNode = null;
     }
+    
+    frequencyBuffer = null;
+    timeBuffer = null;
     
     isInitialized.value = false;
     currentResult.value = null;

@@ -649,10 +649,16 @@ function startTrail() {
   trailInterval = window.setInterval(() => {
     const frame = displayFrame.value;
     if (!frame || !stageConfig.value.cat.trailEffect) {
-      trailHistory.value = [];
+      if (trailHistory.value.length > 0) trailHistory.value = [];
       return;
     }
-    trailHistory.value = [frame, ...trailHistory.value].slice(0, MAX_TRAILS);
+    const prev = trailHistory.value;
+    // 复用数组引用，只在内容变化时创建新数组
+    if (prev.length >= MAX_TRAILS) {
+      trailHistory.value = [frame, ...prev.slice(0, MAX_TRAILS - 1)];
+    } else {
+      trailHistory.value = [frame, ...prev];
+    }
   }, 80);
 }
 
@@ -749,7 +755,9 @@ function startParticles() {
       p.life -= 0.008;
 
       if (p.life <= 0 || p.x < -20 || p.x > w + 20 || p.y < -20 || p.y > h + 20) {
-        particles.splice(i, 1);
+        // swap-and-pop: O(1) 移除，避免 splice 的 O(n) 移动
+        particles[i] = particles[particles.length - 1];
+        particles.pop();
         continue;
       }
 
@@ -867,6 +875,11 @@ function startAnimation() {
   currentFrameIndex.value = 0;
   spriteRotation.value = 0;
 
+  // 使用局部变量追踪状态，减少 Vue 响应式写入次数
+  let localRotation = 0;
+  let localSmoothedSpeed = 1;
+  let localFrameIdx = 0;
+
   function tick(now: number) {
     const dt = now - lastFrameTime;
     lastFrameTime = now;
@@ -878,25 +891,36 @@ function startAnimation() {
       if (rawSpeedRatio.value < 0.01) rawSpeedRatio.value = 0;
     }
 
-    // 平滑速率更新 (EMA)
-    animationSpeedRatio.value += (rawSpeedRatio.value - animationSpeedRatio.value) * SMOOTH_FACTOR;
-    if (animationSpeedRatio.value < 0.01) animationSpeedRatio.value = 0;
+    // 平滑速率更新 (EMA) — 使用局部变量
+    localSmoothedSpeed += (rawSpeedRatio.value - localSmoothedSpeed) * SMOOTH_FACTOR;
+    if (localSmoothedSpeed < 0.01) localSmoothedSpeed = 0;
+
+    // 仅在值有有意义变化时才写入响应式
+    if (Math.abs(localSmoothedSpeed - animationSpeedRatio.value) > 0.005) {
+      animationSpeedRatio.value = localSmoothedSpeed;
+    }
 
     // 旋转角度更新（基于阶段配置转速 × 速率比）
     const rotSpeed = stageConfig.value.cat.rotationSpeed; // deg/s
-    const degreesPerFrame = rotSpeed * animationSpeedRatio.value * (dt / 1000);
-    spriteRotation.value = (spriteRotation.value + degreesPerFrame) % 360;
+    const degreesPerFrame = rotSpeed * localSmoothedSpeed * (dt / 1000);
+    localRotation = (localRotation + degreesPerFrame) % 360;
+
+    // 仅在旋转角变化 > 0.5° 时写入响应式（避免亚像素更新触发渲染）
+    if (Math.abs(localRotation - spriteRotation.value) > 0.5) {
+      spriteRotation.value = localRotation;
+    }
 
     // 帧动画：速率足够高时推进帧
-    if (animationSpeedRatio.value >= IDLE_SPEED_THRESHOLD) {
-      const effectiveDuration = baseFrameDuration.value / animationSpeedRatio.value;
+    if (localSmoothedSpeed >= IDLE_SPEED_THRESHOLD) {
+      const effectiveDuration = baseFrameDuration.value / localSmoothedSpeed;
       frameAccumulator += dt;
 
       if (effectiveDuration > 0 && frameAccumulator >= effectiveDuration) {
         const steps = Math.floor(frameAccumulator / effectiveDuration);
         const pack = loadedPack.value;
         if (pack && pack.animationFrames.length > 0) {
-          currentFrameIndex.value = (currentFrameIndex.value + steps) % pack.animationFrames.length;
+          localFrameIdx = (localFrameIdx + steps) % pack.animationFrames.length;
+          currentFrameIndex.value = localFrameIdx;
         }
         frameAccumulator %= effectiveDuration;
       }
@@ -1280,8 +1304,8 @@ onUnmounted(() => {
 
 /* ==================== 特效层 ==================== */
 .particle-layer {
-  position: absolute; inset: -50%; z-index: 0;
-  width: 200%; height: 200%;
+  position: absolute; inset: 0; z-index: 0;
+  width: 100%; height: 100%;
   pointer-events: none;
 }
 .vignette-layer {
