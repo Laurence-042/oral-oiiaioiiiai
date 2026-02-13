@@ -144,13 +144,13 @@ export function useResourcePack() {
   /** 获取所有可用资源包列表 */
   async function fetchAvailablePacks(): Promise<ResourcePackInfo[]> {
     try {
-      const res = await fetch('/resources/index.json');
+      const res = await fetch(`${import.meta.env.BASE_URL}resources/index.json`);
       const data = await res.json() as { packs: string[] };
 
       const infos: ResourcePackInfo[] = [];
       for (const packId of data.packs) {
         try {
-          const mRes = await fetch(`/resources/${packId}/manifest.json`);
+          const mRes = await fetch(`${import.meta.env.BASE_URL}resources/${packId}/manifest.json`);
           const manifest = await mRes.json() as ResourcePackManifest;
           infos.push({ id: manifest.id, name: manifest.name, description: manifest.description });
         } catch {
@@ -173,7 +173,7 @@ export function useResourcePack() {
     error.value = null;
 
     try {
-      const basePath = `/resources/${packId}`;
+      const basePath = `${import.meta.env.BASE_URL}resources/${packId}`;
 
       // 1. 加载清单
       const mRes = await fetch(`${basePath}/manifest.json`);

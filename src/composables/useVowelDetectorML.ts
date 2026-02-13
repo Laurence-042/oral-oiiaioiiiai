@@ -115,7 +115,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
   // ==================== 模型初始化 ====================
   async function loadModel(): Promise<void> {
     try {
-      const modelPath = config?.modelPath ?? '/models/vowel/model.json';
+      const modelPath = config?.modelPath ?? `${import.meta.env.BASE_URL}models/vowel/model.json`;
       model = (await tf.loadGraphModel(modelPath)) as tf.GraphModel;
       console.log('✅ 元音识别模型已加载');
     } catch (err) {
@@ -442,7 +442,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
       audioContextState: audioContext?.state,
       audioProcessing: 'AudioWorklet',
       silenceThreshold: cfg.silenceThreshold,
-      modelPath: config?.modelPath ?? '/models/vowel/model.json',
+      modelPath: config?.modelPath ?? `${import.meta.env.BASE_URL}models/vowel/model.json`,
       isInitialized: isInitialized.value,
       isListening: isListening.value
     };
