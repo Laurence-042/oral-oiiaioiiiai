@@ -347,7 +347,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch, ref, onMounted, onUnmounted } from 'vue';
+import { computed, watch, ref, shallowRef, onMounted, onUnmounted } from 'vue';
 import { useVowelDetectorML } from '@/composables/useVowelDetectorML';
 import { useVowelDetector } from '@/composables/useVowelDetector';
 import { useGameState, connectVowelDetectorToGameState } from '@/composables/useGameState';
@@ -622,7 +622,7 @@ const spriteAreaStyle = computed(() => {
 
 // ==================== 残影 (trail) ====================
 const MAX_TRAILS = 4;
-const trailHistory = ref<HTMLImageElement[]>([]);
+const trailHistory = shallowRef<HTMLImageElement[]>([]);
 let trailInterval = 0;
 
 const trailFrames = computed(() => {
@@ -671,6 +671,7 @@ const particleCanvas = ref<HTMLCanvasElement | null>(null);
 let particleRAF = 0;
 let particles: Array<{ x: number; y: number; vx: number; vy: number; size: number; color: string; life: number }> = [];
 let particleEnergy = 0;             // 当前粒子能量 (0-1)
+let particleResizeObserver: ResizeObserver | null = null;
 const PARTICLE_DECAY = 0.95;        // 每帧衰减
 const PARTICLE_THRESHOLD = 0.01;    // 低于此值停止生成
 
@@ -698,8 +699,9 @@ function startParticles() {
     canvas.height = canvas.offsetHeight * dpr;
   }
   resize();
-  const ro = new ResizeObserver(resize);
-  ro.observe(canvas);
+  if (particleResizeObserver) particleResizeObserver.disconnect();
+  particleResizeObserver = new ResizeObserver(resize);
+  particleResizeObserver.observe(canvas);
 
   /** 从中心生成一个粒子 */
   function spawnParticle(w: number, h: number, cfg: { speed: number; size: [number, number]; colors: string[] }) {
@@ -749,7 +751,7 @@ function startParticles() {
       particles.push(spawnParticle(w, h, cfg));
     }
 
-    // 更新 & 绘制（已生成的粒子自然消亡，不会重生）
+    // 更新粒子（移除已消亡的）
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       p.x += p.vx;
@@ -760,15 +762,26 @@ function startParticles() {
         // swap-and-pop: O(1) 移除，避免 splice 的 O(n) 移动
         particles[i] = particles[particles.length - 1];
         particles.pop();
-        continue;
       }
+    }
 
-      const r = p.size * devicePixelRatio;
-      ctx.globalAlpha = Math.min(1, p.life * 2);
-      ctx.fillStyle = p.color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-      ctx.fill();
+    // 按颜色分组绘制，减少 canvas fillStyle 状态切换
+    // 对 <100 粒子而言差距微小，但避免了每粒子一次状态切换
+    const colorGroups = new Map<string, typeof particles>();
+    for (const p of particles) {
+      let group = colorGroups.get(p.color);
+      if (!group) { group = []; colorGroups.set(p.color, group); }
+      group.push(p);
+    }
+    for (const [color, group] of colorGroups) {
+      ctx.fillStyle = color;
+      for (const p of group) {
+        const r = p.size * devicePixelRatio;
+        ctx.globalAlpha = Math.min(1, p.life * 2);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
     ctx.globalAlpha = 1;
 
@@ -786,6 +799,7 @@ function startParticles() {
 
 function stopParticles() {
   if (particleRAF) { cancelAnimationFrame(particleRAF); particleRAF = 0; }
+  if (particleResizeObserver) { particleResizeObserver.disconnect(); particleResizeObserver = null; }
   particles = [];
   const canvas = particleCanvas.value;
   if (canvas) {

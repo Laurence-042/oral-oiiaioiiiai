@@ -63,12 +63,12 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
   };
 
   // ==================== 响应式状态 ====================
-  const currentResult = ref<VowelDetectionResult | null>(null);
+  const currentResult = shallowRef<VowelDetectionResult | null>(null);
   const confirmedVowel = ref<Vowel | null>(null);
   const isListening = ref(false);
   const isInitialized = ref(false);
   const error = ref<string | null>(null);
-  const latestProbabilities = ref<number[] | null>(null);  // 最新的各类别概率
+  const latestProbabilities = shallowRef<number[] | null>(null);  // 最新的各类别概率
   const debugData = shallowRef<VowelDetectorDebugData>({
     frequencyData: null,
     timeData: null
@@ -230,7 +230,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
         });
         
         // 更新最新概率分布（用于 UI 显示）
-        latestProbabilities.value = Array.from(probabilities);
+        latestProbabilities.value = probabilities;
         
         // 获取最高置信度的类
         let maxIdx = 0;

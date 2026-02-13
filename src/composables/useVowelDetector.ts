@@ -46,7 +46,7 @@ export function useVowelDetector(config?: VowelDetectorConfig): VowelDetectorHoo
   };
 
   // ==================== 响应式状态 ====================
-  const currentResult = ref<VowelDetectionResult | null>(null);
+  const currentResult = shallowRef<VowelDetectionResult | null>(null);
   const confirmedVowel = ref<Vowel | null>(null);
   const isListening = ref(false);
   const isInitialized = ref(false);
