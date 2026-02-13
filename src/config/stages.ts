@@ -173,9 +173,9 @@ export const STAGE_VISUAL_CONFIGS: StageVisualConfig[] = [
       gradient: 'linear-gradient(180deg, #ff6b6b 0%, #e94560 50%, #0f3460 100%)',
       particles: {
         enabled: true,
-        count: 100,
+        count: 60,
         speed: 3,
-        size: [4, 8],
+        size: [3, 7],
         colors: ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff']
       }
     },
@@ -199,12 +199,12 @@ export const STAGE_VISUAL_CONFIGS: StageVisualConfig[] = [
     },
     background: {
       color: '#feca57',
-      gradient: 'conic-gradient(from 0deg, #ff6b6b, #feca57, #48dbfb, #ff9ff3, #54a0ff, #ff6b6b)',
+      gradient: 'linear-gradient(135deg, #ff6b6b, #feca57, #48dbfb, #ff9ff3, #54a0ff, #ff6b6b)',
       particles: {
         enabled: true,
-        count: 200,
-        speed: 5,
-        size: [5, 12],
+        count: 80,
+        speed: 4,
+        size: [4, 9],
         colors: ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#5f27cd', '#00d2d3']
       },
       shader: 'rainbow-vortex'

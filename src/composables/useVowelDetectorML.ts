@@ -76,6 +76,7 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
 
   // ==================== 内部状态 ====================
   let audioContext: AudioContext | null = null;
+  let lastDebugUpdateTime = 0;
   let mediaStream: MediaStream | null = null;
   let workletNode: AudioWorkletNode | null = null;
   let model: TF.GraphModel | null = null;
@@ -207,7 +208,11 @@ export function useVowelDetectorML(config?: VowelDetectorConfig): VowelDetectorH
 
       // 计算音量
       const volume = calculateVolume(audioData);
-      debugData.value = { frequencyData: null, timeData: audioData };
+      // 节流 debugData 更新（仅 DebugView 消费，游戏中无需高频触发响应式）
+      if (now - lastDebugUpdateTime > 200) {
+        lastDebugUpdateTime = now;
+        debugData.value = { frequencyData: null, timeData: audioData };
+      }
 
       // 判断是否静音
       if (volume < cfg.silenceThreshold) {

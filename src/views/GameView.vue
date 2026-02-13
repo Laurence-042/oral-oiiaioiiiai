@@ -604,15 +604,14 @@ const vignetteStyle = computed(() => {
   return { opacity: String(v) };
 });
 
-/** 色差滤镜 (sprite) */
+/** 色差滤镜 (sprite) — 使用轻量 CSS 变换代替 GPU 密集的 drop-shadow */
 const chromaticStyle = computed(() => {
   const c = stageConfig.value.screenEffects.chromatic;
   if (c <= 0) return {};
-  // c is ~0.002–0.01 → translate to px offset for text-shadow / drop-shadow trick
-  // We'll use CSS filter trick via drop-shadow layers
-  const px = c * 500; // 0.01 → 5px
+  // 使用 hue-rotate 模拟色差效果，GPU 开销远低于多层 drop-shadow
+  const deg = c * 3600; // 0.01 → 36deg
   return {
-    filter: `drop-shadow(${px}px 0 0 rgba(255,0,0,0.4)) drop-shadow(-${px}px 0 0 rgba(0,100,255,0.4))`
+    filter: `saturate(${1 + c * 30}) hue-rotate(${deg % 360}deg)`
   };
 });
 
@@ -690,10 +689,13 @@ function startParticles() {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
+  // 限制 DPI 倍率，高分屏（3x+）全分辨率渲染开销过大
+  const dpr = Math.min(devicePixelRatio, 2);
+
   function resize() {
     if (!canvas) return;
-    canvas.width = canvas.offsetWidth * devicePixelRatio;
-    canvas.height = canvas.offsetHeight * devicePixelRatio;
+    canvas.width = canvas.offsetWidth * dpr;
+    canvas.height = canvas.offsetHeight * dpr;
   }
   resize();
   const ro = new ResizeObserver(resize);
@@ -707,8 +709,8 @@ function startParticles() {
     const speed = (0.5 + Math.random() * 1.5) * cfg.speed;
     const colors = cfg.colors.length > 0 ? cfg.colors : ['#ffffff'];
     return {
-      x: cx + (Math.random() - 0.5) * 20 * devicePixelRatio,
-      y: cy + (Math.random() - 0.5) * 20 * devicePixelRatio,
+      x: cx + (Math.random() - 0.5) * 20 * dpr,
+      y: cy + (Math.random() - 0.5) * 20 * dpr,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
       size: cfg.size[0] + Math.random() * (cfg.size[1] - cfg.size[0]),
@@ -1443,62 +1445,61 @@ onUnmounted(() => {
   flex: 1; display: flex; flex-direction: column;
   min-height: 0;
   border-radius: 0;
-  will-change: background, transform;
   position: relative;
   overflow: hidden;
 }
 
 /* ==================== 神猫动态光背景 ==================== */
 .main-aurora {
-  position: absolute; inset: -60%; z-index: 0;
-  width: 220%; height: 220%;
+  position: absolute; inset: -20%; z-index: 0;
+  width: 140%; height: 140%;
   pointer-events: none;
 }
 .main-aurora-ring {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  will-change: transform, opacity;
+  will-change: transform;
 }
 .main-aurora-ring.ring-1 {
   background: conic-gradient(
     from 0deg,
-    rgba(255,107,107,0.5),
-    rgba(254,202,87,0.4),
-    rgba(72,219,251,0.45),
-    rgba(255,159,243,0.4),
-    rgba(84,160,255,0.45),
-    rgba(255,107,107,0.5)
+    rgba(255,107,107,0.4),
+    rgba(254,202,87,0.3),
+    rgba(72,219,251,0.35),
+    rgba(255,159,243,0.3),
+    rgba(84,160,255,0.35),
+    rgba(255,107,107,0.4)
   );
-  filter: blur(50px);
+  filter: blur(30px);
   mix-blend-mode: screen;
-  animation: main-aurora-spin 8s linear infinite;
+  animation: main-aurora-spin 10s linear infinite;
 }
 .main-aurora-ring.ring-2 {
-  inset: 15%;
+  inset: 20%;
   background: conic-gradient(
     from 180deg,
-    rgba(84,160,255,0.45),
-    rgba(95,39,205,0.35),
-    rgba(0,210,211,0.5),
-    rgba(254,202,87,0.35),
-    rgba(255,107,107,0.4),
-    rgba(84,160,255,0.45)
-  );
-  filter: blur(70px);
-  mix-blend-mode: screen;
-  animation: main-aurora-spin-rev 12s linear infinite;
-}
-.main-aurora-ring.ring-3 {
-  inset: 25%;
-  background: radial-gradient(
-    ellipse at center,
-    rgba(255,255,255,0.15) 0%,
-    rgba(255,159,243,0.2) 30%,
-    rgba(72,219,251,0.1) 60%,
-    transparent 80%
+    rgba(84,160,255,0.35),
+    rgba(95,39,205,0.25),
+    rgba(0,210,211,0.4),
+    rgba(254,202,87,0.25),
+    rgba(255,107,107,0.3),
+    rgba(84,160,255,0.35)
   );
   filter: blur(40px);
+  mix-blend-mode: screen;
+  animation: main-aurora-spin-rev 14s linear infinite;
+}
+.main-aurora-ring.ring-3 {
+  inset: 30%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(255,255,255,0.12) 0%,
+    rgba(255,159,243,0.15) 30%,
+    rgba(72,219,251,0.08) 60%,
+    transparent 80%
+  );
+  /* 不用 blur，显著降低 GPU 开销 */
   animation: main-aurora-pulse 5s ease-in-out infinite;
 }
 
@@ -1552,11 +1553,13 @@ onUnmounted(() => {
   width: 100%; height: 100%;
   display: flex; align-items: center; justify-content: center;
   position: relative; z-index: 2;
+  /* 代替 sprite-img 上的 drop-shadow，box-shadow 不触发每帧重绘 */
+  border-radius: 50%;
 }
 .sprite-img {
   max-width: 100%; max-height: 100%;
   object-fit: contain; image-rendering: auto;
-  filter: drop-shadow(0 0 20px rgba(88,160,255,0.3));
+  /* 不用 filter: drop-shadow，改用性能更好的 CSS 变量发光 */
 }
 
 /* ==================== 序列 & 检测 ==================== */

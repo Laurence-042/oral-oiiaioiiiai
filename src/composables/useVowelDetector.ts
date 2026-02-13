@@ -63,6 +63,7 @@ export function useVowelDetector(config?: VowelDetectorConfig): VowelDetectorHoo
   let analyserNode: AnalyserNode | null = null;
   let mediaStream: MediaStream | null = null;
   let animationFrameId: number | null = null;
+  let lastDebugUpdateTime = 0;
   let lastAnalysisTime = 0;
   
   // 预分配复用缓冲区 — 避免每帧 GC
@@ -316,10 +317,13 @@ export function useVowelDetector(config?: VowelDetectorConfig): VowelDetectorHoo
       analyserNode.getFloatFrequencyData(frequencyBuffer!);
       analyserNode.getFloatTimeDomainData(timeBuffer!);
 
-      // 仅引用既有缓冲区，避免每帧触发 Vue 响应式更新
       const frequencyData = frequencyBuffer as Float32Array;
       const timeData = timeBuffer as Float32Array;
-      debugData.value = { frequencyData, timeData };
+      // 节流 debugData 更新（仅 DebugView 消费，游戏中无需高频触发响应式）
+      if (now - lastDebugUpdateTime > 200) {
+        lastDebugUpdateTime = now;
+        debugData.value = { frequencyData, timeData };
+      }
 
       // 计算音量 (使用时域 RMS + 频域峰值的组合)
       const rmsVolume = calculateVolumeFromTimeData(timeData);
