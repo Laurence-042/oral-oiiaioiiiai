@@ -150,8 +150,6 @@ function drawQRCode(
 export interface ShareCaptureReturn {
   generating: ReturnType<typeof ref<boolean>>;
   generateShareImage: (snap: GameSnapshot, textConfig: ResolvedPackTextConfig) => Promise<Blob | null>;
-  downloadShareImage: (snap: GameSnapshot, textConfig: ResolvedPackTextConfig) => Promise<void>;
-  copyShareImage: (snap: GameSnapshot, textConfig: ResolvedPackTextConfig) => Promise<boolean>;
 }
 
 /**
@@ -169,7 +167,7 @@ export function useShareCapture(): ShareCaptureReturn {
    * 生成分享图片 Blob
    */
   async function generateShareImage(snap: GameSnapshot, textConfig: ResolvedPackTextConfig): Promise<Blob | null> {
-    const siteUrl = window.location.origin;
+    const siteUrl = new URL(import.meta.env.BASE_URL, window.location.origin).href.replace(/\/+$/, '');
     generating.value = true;
     try {
       const W = 720;
@@ -352,42 +350,8 @@ export function useShareCapture(): ShareCaptureReturn {
     }
   }
 
-  /**
-   * 生成并下载分享图片
-   */
-  async function downloadShareImage(snap: GameSnapshot, textConfig: ResolvedPackTextConfig): Promise<void> {
-    const blob = await generateShareImage(snap, textConfig);
-    if (!blob) return;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `oiiaioiiiai-${snap.score}-${Date.now()}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }
-
-  /**
-   * 生成并复制分享图片到剪贴板
-   */
-  async function copyShareImage(snap: GameSnapshot, textConfig: ResolvedPackTextConfig): Promise<boolean> {
-    const blob = await generateShareImage(snap, textConfig);
-    if (!blob) return false;
-    try {
-      await navigator.clipboard.write([
-        new ClipboardItem({ 'image/png': blob })
-      ]);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
   return {
     generating,
     generateShareImage,
-    downloadShareImage,
-    copyShareImage
   };
 }

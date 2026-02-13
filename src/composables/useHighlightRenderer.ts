@@ -77,11 +77,12 @@ export async function renderHighlightCard(opts: RenderHighlightCardOptions): Pro
   const rand = seededRandom(moment.id * 7 + moment.timestamp);
 
   // ── 背景 ──
-  drawStageBackground(ctx, W, H, stageConfig.background, rand);
+  const shouldShowParticles = moment.reason !== 'final' || moment.combo > 0;
+  drawStageBackground(ctx, W, H, stageConfig.background, rand, shouldShowParticles, moment.combo);
 
-  // ── 精灵 (随机 2-4 个扩散) ──
+  // ── 精灵（居中主猫 + 淡化背景猫） ──
   if (spriteFrames.length > 0) {
-    drawScatteredSprites(ctx, W, H, spriteFrames, rand, moment.stage);
+    drawCenteredSprite(ctx, W, H, spriteFrames, rand, moment.stage, stageConfig.cat.scale);
   }
 
   // ── 暗角蒙版 (让文字更清晰) ──
@@ -156,7 +157,9 @@ function drawStageBackground(
   ctx: CanvasRenderingContext2D,
   w: number, h: number,
   bg: ReturnType<typeof getStageVisualConfig>['background'],
-  rand: () => number
+  rand: () => number,
+  showParticles: boolean,
+  combo: number,
 ) {
   // 纯色底
   ctx.fillStyle = bg.color;
@@ -164,7 +167,6 @@ function drawStageBackground(
 
   // 渐变覆盖（如果有）
   if (bg.gradient && !bg.gradient.includes('conic')) {
-    // 解析 linear-gradient：只用起止两色做简化渲染
     const colors = extractGradientColors(bg.gradient);
     if (colors.length >= 2) {
       const grad = ctx.createLinearGradient(0, 0, 0, h);
@@ -173,7 +175,6 @@ function drawStageBackground(
       ctx.fillRect(0, 0, w, h);
     }
   } else if (bg.gradient?.includes('conic')) {
-    // 神猫彩虹：用径向多色近似
     const colors = ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff'];
     for (let i = 0; i < 5; i++) {
       const glow = ctx.createRadialGradient(
@@ -187,53 +188,95 @@ function drawStageBackground(
     }
   }
 
-  // 粒子装饰点（静态散布）
-  if (bg.particles.enabled && bg.particles.colors.length > 0) {
-    const count = Math.min(bg.particles.count, 60); // 控制密度
-    for (let i = 0; i < count; i++) {
-      const x = rand() * w;
-      const y = rand() * h;
-      const size = bg.particles.size[0] + rand() * (bg.particles.size[1] - bg.particles.size[0]);
-      const color = bg.particles.colors[Math.floor(rand() * bg.particles.colors.length)];
-      ctx.beginPath();
-      ctx.arc(x, y, size, 0, Math.PI * 2);
-      ctx.fillStyle = color + '88'; // 半透明
-      ctx.fill();
+  // 粒子效果：模拟多次爆发叠加
+  // 仅在非静音结束 && 阶段粒子已开启时显示
+  if (showParticles && bg.particles.enabled && bg.particles.colors.length > 0) {
+    // 爆发波数：高连击时看到更多叠加层
+    const waveCount = Math.min(5, 1 + Math.floor(combo / 8));
+    const cx = w / 2;
+    const cy = h * 0.45; // 以猫的中心为粒子源
+
+    for (let wave = 0; wave < waveCount; wave++) {
+      // 每波的粒子数量和扩散半径不同（越早的波扩散越远、越淡）
+      const age = (wave + 1) / (waveCount + 1); // 0→1，越大=越旧
+      const spread = 0.15 + age * 0.6; // 扩散范围占画布比例
+      const alpha = 0.9 - age * 0.5;   // 越旧越透明
+      const count = Math.min(bg.particles.count, 40);
+
+      for (let i = 0; i < count; i++) {
+        const angle = rand() * Math.PI * 2;
+        const dist = rand() * spread * w * 0.5;
+        const x = cx + Math.cos(angle) * dist;
+        const y = cy + Math.sin(angle) * dist;
+        const size = bg.particles.size[0] + rand() * (bg.particles.size[1] - bg.particles.size[0]);
+        const color = bg.particles.colors[Math.floor(rand() * bg.particles.colors.length)];
+
+        ctx.globalAlpha = alpha * (0.5 + rand() * 0.5);
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+      }
     }
+    ctx.globalAlpha = 1;
   }
 }
 
-/** 绘制随机扩散的精灵 */
-function drawScatteredSprites(
+/**
+ * 绘制居中主猫 + 光影效果，模拟真实游戏中的猫位置。
+ * 主猫居中于卡片上半部分（与游戏中 sprite-area 对应），
+ * 随机旋转角度表现动态感。
+ */
+function drawCenteredSprite(
   ctx: CanvasRenderingContext2D,
   w: number, h: number,
   frames: HTMLImageElement[],
   rand: () => number,
-  stage: Stage
+  stage: Stage,
+  catScale: number,
 ) {
-  const count = 2 + Math.min(stage, 3); // 2-5 个精灵
-  const spriteSize = w * 0.35; // 精灵大小约为卡片宽度的 35%
+  // 主猫大小：宽度的 50%，与实际游戏中 max-width: 360/720 ≈ 50% 一致
+  const baseSize = w * 0.50;
+  const spriteSize = baseSize * catScale;
+  // 猫中心：水平居中，垂直偏上（游戏中 sprite-area 在顶部 flex:1 区域）
+  const cx = w / 2;
+  const cy = h * 0.45;
+  // 随机旋转（模拟动画中的某一帧角度）
+  const rotation = (rand() - 0.5) * Math.PI * 0.4; // ±36°
+  const frame = frames[Math.floor(rand() * frames.length)];
 
-  for (let i = 0; i < count; i++) {
-    const frame = frames[Math.floor(rand() * frames.length)];
-    const x = w * 0.1 + rand() * (w * 0.6);
-    const y = h * 0.25 + rand() * (h * 0.35);
-    const rotation = (rand() - 0.5) * Math.PI * 0.8; // ±72°
-    const scale = 0.7 + rand() * 0.6; // 0.7x ~ 1.3x
-    const alpha = 0.5 + rand() * 0.4; // 0.5 ~ 0.9 透明度
+  // ── 投影（模拟 sprite-img 的 drop-shadow） ──
+  ctx.save();
+  ctx.globalAlpha = 0.25;
+  ctx.translate(cx, cy + spriteSize * 0.08); // 影子略微下移
+  ctx.rotate(rotation);
+  ctx.filter = 'blur(16px)';
+  ctx.drawImage(frame, -spriteSize / 2, -spriteSize / 2, spriteSize, spriteSize);
+  ctx.filter = 'none';
+  ctx.restore();
 
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(x + spriteSize * scale / 2, y + spriteSize * scale / 2);
-    ctx.rotate(rotation);
-    ctx.drawImage(
-      frame,
-      -spriteSize * scale / 2,
-      -spriteSize * scale / 2,
-      spriteSize * scale,
-      spriteSize * scale
-    );
-    ctx.restore();
+  // ── 主猫 ──
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rotation);
+  ctx.drawImage(frame, -spriteSize / 2, -spriteSize / 2, spriteSize, spriteSize);
+  ctx.restore();
+
+  // ── 高阶段：残影 / 拖尾猫（模拟 trail effect）──
+  if (stage >= 3) {
+    const trailCount = Math.min(stage - 1, 4);
+    for (let i = 0; i < trailCount; i++) {
+      const trailFrame = frames[Math.floor(rand() * frames.length)];
+      const offset = (i + 1) * 12; // 像拖尾一样偏移
+      const trailAlpha = 0.12 - i * 0.02;
+      const trailAngle = rotation - (i + 1) * 0.15;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0.03, trailAlpha);
+      ctx.translate(cx - offset * Math.sin(rotation), cy + offset * Math.cos(rotation));
+      ctx.rotate(trailAngle);
+      ctx.drawImage(trailFrame, -spriteSize / 2, -spriteSize / 2, spriteSize, spriteSize);
+      ctx.restore();
+    }
   }
 }
 

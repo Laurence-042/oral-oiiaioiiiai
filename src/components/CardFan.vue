@@ -34,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onUnmounted } from 'vue';
+import { ref, watch, onUnmounted } from 'vue';
 
 const props = withDefaults(defineProps<{
   /** 卡片数量 */
@@ -50,7 +50,6 @@ const emit = defineEmits<{
 }>();
 
 // ── 状态 ──
-const containerRef = ref<HTMLDivElement | null>(null);
 const activeIndex = ref(props.initialIndex);
 const dragOffset = ref(0); // 拖拽中的像素偏移
 
