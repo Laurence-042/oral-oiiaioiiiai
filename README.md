@@ -4,9 +4,11 @@
 
 一个基于实时元音识别的浏览器音游。玩家对着麦克风连续发出 O / I / A 元音，驱动猫咪旋转并触发五阶段视觉进化。灵感来自那只一边旋转一边发出魔性声音的猫 🐱🔄
 
-**[▶️ 在线试玩](https://laurence-042.github.io/project/oral-oiiaioiiiai/demo/)** ｜ [设计文档](story.md) ｜ [ML 检测器文档](src/composables/VOWEL_DETECTOR_ML.md)
+**[▶️ 在线试玩](https://laurence-042.github.io/project/oral-oiiaioiiiai/demo/)** ｜ [设计文档](story.md) ｜ [ML 检测器文档与项目细节](src/composables/VOWEL_DETECTOR_ML.md)
 
 oiia 素材来源：https://www.bilibili.com/video/BV1AvLizFEPn/
+
+[TOC]
 
 ## 特性
 
@@ -42,8 +44,8 @@ npx tsc --noEmit
 |------|------|
 | 前端框架 | Vue 3 + TypeScript (Composition API) |
 | 构建工具 | Vite 5 |
-| 元音识别 | TensorFlow.js CNN (uint8 量化, 106KB) |
-| 音频处理 | Web Audio API (ScriptProcessorNode, 16kHz 重采样) |
+| 元音识别 | TensorFlow.js CNN / MFCC 共振峰双模式 |
+| 音频处理 | Web Audio API (AudioWorklet, 16kHz 重采样) |
 | 动态音乐 | Tone.js 程序化合成 |
 | 视觉特效 | CSS + Canvas 2D 粒子系统 |
 | 排行榜后端 | Cloudflare Workers + KV |
@@ -67,9 +69,9 @@ src/
 │   └── CardFan.vue                # 扇形卡片轮播组件
 ├── views/
 │   ├── GameView.vue               # 主游戏页面
-│   ├── DebugView.vue              # 共振峰检测调试
-│   ├── AudioAnalyzer.vue          # 频谱可视化工具
-│   └── MediaProcessor.vue         # 素材加工工具
+│   ├── DebugView.vue              # 元音识别调试（CNN/MFCC 切换）
+│   ├── AudioAnalyzer.vue          # 离线音频分析工具
+│   └── MediaProcessor.vue         # 资源包素材加工工具
 ├── config/
 │   ├── stages.ts                  # 5 阶段视觉配置
 │   └── vowels.ts                  # 元音序列 & 共振峰参数
@@ -116,9 +118,144 @@ worker/                            # 排行榜 Cloudflare Worker
 | 超度 | 5,000 | 残影 + 迷幻背景 |
 | 神猫 | 10,000 | 全屏彩虹漩涡 |
 
-## 排行榜后端
+## 开发说明
 
-排行榜使用独立的 Cloudflare Worker 部署，详见 [worker/README.md](worker/README.md)。
+### 路由
+
+| 路径 | 说明 |
+|------|------|
+| `/game` | 主游戏（默认），支持 CNN/MFCC 检测器切换 |
+| `/debug` | 实时元音识别调试，可切换 CNN/MFCC，查看概率分布与延迟 |
+| `/analyzer` | 离线音频分析，加载文件或录音查看频谱/共振峰特征 |
+| `/media-processor` | 资源包素材加工，从视频中提取音节音频和帧动画 |
+
+### 资源包系统
+
+资源包是游戏内容的核心载体，定义了角色动画、音节音效、BGM、阶段文案等。存放于 `public/resources/<pack-id>/`。
+
+#### 目录结构
+
+```
+public/resources/
+├── index.json                     # 资源包注册表 { "packs": ["oiia", ...] }
+└── <pack-id>/
+    ├── manifest.json              # 必需 — 包元数据、资产清单
+    ├── bgm.json                   # 可选 — Tone.js 程序化 BGM 配置
+    ├── syllables/                 # 音节音频
+    │   ├── 001_U.wav              # 命名：<3位序号>_<元音>.wav
+    │   ├── 002_I.wav
+    │   └── ...
+    └── chroma_frames/             # 角色帧动画（色度键 PNG）
+        ├── chroma_001.png         # 第 1 帧 = 静止待机帧
+        ├── chroma_002.png         # 其余帧 = 动画循环
+        └── ...
+```
+
+#### manifest.json
+
+```jsonc
+{
+  "id": "oiia",                          // 唯一标识，与目录名一致
+  "name": "OIIA Cat",                     // 显示名称
+  "description": "经典旋转猫",             // 简短描述
+  "sequence": ["U","I","I","A",...],      // 目标元音序列
+  "syllables": ["001_U.wav", ...],        // 音节文件列表（有序）
+  "chromaFrames": ["chroma_001.png",...],  // 帧动画文件列表（有序）
+  "bgm": "bgm.json",                      // 可选，BGM 配置文件名
+  "textConfig": {                          // 可选，文案配置（省略则使用默认值）
+    "stages": [
+      { "name": "初醒", "scoreThreshold": 0,
+        "copywriting": [{"title": "...", "subtitle": "..."}] },
+      // ... 其余阶段
+    ],
+    "highlightLabels": {
+      "stage-up": "⬆ {stageName}",
+      "combo-milestone": "🔥 {combo} 连击",
+      "perfect-cycle": "✨ 完美循环 ×{count}",
+      "speed-burst": "⚡ 极速 {speed}/s",
+      "accuracy-streak": "🎯 精准 ×{count}",
+      "final": "🏁 最终时刻"
+    },
+    "leaderboardText": { "unit": "猫叫", "participateVerb": "参与" }
+  }
+}
+```
+
+#### bgm.json
+
+数据驱动的合成器 BGM 配置，每个轨道指定 Tone.js 合成器类型、音符序列和生效阶段：
+
+```jsonc
+{
+  "baseBPM": 120,
+  "bpmRange": [60, 240],
+  "masterVolume": -8,
+  "tracks": [
+    {
+      "id": "kick",
+      "synth": "membrane",          // membrane | metal | noise | mono | fm | am | duo
+      "options": { ... },            // Tone.js 合成器参数
+      "effects": [{"type":"reverb"}], // 可选效果器链
+      "volume": -6,
+      "pattern": ["C1", null, null, null],  // 音符序列，null=休止
+      "subdivision": "4n",
+      "stages": [1, 2, 3, 4, 5],     // 在哪些阶段启用
+      "stageVolumes": { "1": -12 }   // 可选的逐阶段音量覆盖
+    }
+    // ... 更多轨道
+  ]
+}
+```
+
+轨道按阶段逐层叠入：低阶段只有节奏基底，高阶段加入旋律和 pad，营造递进感。
+
+#### 创建新资源包
+
+1. **准备素材视频** — 包含角色循环动画和配音的 MP4
+2. **使用素材加工工具** — 访问 `/media-processor`，导入视频，按静音点自动切分音节，提取帧动画
+3. **编写 manifest.json** — 填写序列、文件列表、阶段文案
+4. **（可选）编写 bgm.json** — 定义合成器轨道和音符序列
+5. **注册资源包** — 将 `pack-id` 添加到 `public/resources/index.json` 的 `packs` 数组
+6. 刷新页面，在游戏右上角下拉选择新资源包
+
+### ML 模型
+
+当前模型基于 Kaggle 独立元音数据集训练。游戏同时提供 CNN 和 MFCC 两种检测器，默认使用 MFCC（延迟更低）。详见 [ML 检测器文档](src/composables/VOWEL_DETECTOR_ML.md)。训练笔记本位于 [model/](model/) 目录。
+
+## 二次开发
+
+### 添加自定义资源包
+
+最简单的扩展方式 — 不需要修改任何代码：
+
+1. 在 `public/resources/` 下新建目录
+2. 放入音节音频（WAV）、帧动画（PNG）、manifest.json
+3. 在 `index.json` 注册
+4. 完成，游戏会自动在界面提供切换选项
+
+### 修改游戏机制
+
+- **计分规则** — `src/composables/useGameState.ts`，修改 `handleVowel()` 中的分数计算
+- **阶段阈值** — 由资源包 `manifest.json` 的 `textConfig.stages[].scoreThreshold` 定义，也可在 `src/config/stages.ts` 修改默认值
+- **元音序列** — 由资源包 `manifest.json` 的 `sequence` 字段定义
+- **中断条件** — `useGameState.ts` 中的 `silenceTimeout`（静音超时）和 `maxConsecutiveErrors`（连续错误）
+
+### 修改视觉效果
+
+- **阶段视觉配置** — `src/config/stages.ts` 中的 `StageVisualConfig`（旋转速度、粒子、色差、屏幕抖动等）
+- **主游戏 UI** — `src/views/GameView.vue`（CSS + 模板）
+- **分享卡片样式** — `src/composables/useShareCapture.ts` 和 `useHighlightRenderer.ts`（Canvas 绘制）
+
+### 改进元音检测
+
+- **CNN 模型** — 重新训练并替换 `public/models/vowel/` 下的模型文件，保持输入格式 (3360 samples @ 16kHz) 和输出格式 (6 类 softmax) 不变
+- **MFCC 参数** — `src/config/vowels.ts` 中调整共振峰频率范围
+- **AudioWorklet** — `src/workers/vowelAudioProcessor.ts` 中调整重采样和缓冲策略
+- **调试** — `/debug` 页实时对比两种检测器，`/analyzer` 页离线分析音频特征
+
+### 排行榜后端
+
+独立的 Cloudflare Worker，位于 `worker/` 目录。前端通过环境变量 `VITE_LEADERBOARD_API` 配置 API 地址。不配置则排行榜功能自动隐藏。
 
 ```bash
 cd worker
@@ -127,25 +264,6 @@ npm run dev      # 本地开发 → http://localhost:8787
 npm run deploy   # 部署到 Cloudflare
 ```
 
-## 开发说明
-
-### 路由
-
-| 路径 | 说明 |
-|------|------|
-| `/game` | 主游戏（默认） |
-| `/debug` | 共振峰检测器调试 |
-| `/analyzer` | 音频频谱分析 |
-| `/media-processor` | 素材加工工具 |
-
-### 资源包
-
-资源包存放于 `public/resources/`，每个包含 `manifest.json` 定义帧动画、音节、阶段文案等。通过 `index.json` 注册可用资源包。
-
-### ML 模型
-
-当前模型基于 TIMIT 数据集训练（92% 验证准确率），对孤立元音场景有待优化。计划迁移至 Hillenbrand 孤立元音数据集重新训练。训练笔记本位于 [model/](model/) 目录。
-
 ## License
 
-MIT
+[MPL-2.0](LICENSE)
